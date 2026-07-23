@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    
+    <meta charset="utf-8">
+    <title>WWebTask.mjs - Documentation</title>
+    
+    
+    <script src="scripts/prettify/prettify.js"></script>
+    <script src="scripts/prettify/lang-css.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc.css">
+    <script src="scripts/nav.js" defer></script>
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+
+<input type="checkbox" id="nav-trigger" class="nav-trigger" />
+<label for="nav-trigger" class="navicon-button x">
+  <div class="navicon"></div>
+</label>
+
+<label for="nav-trigger" class="overlay"></label>
+
+<nav >
+    
+    
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul>
+    
+</nav>
+
+<div id="main">
+    
+    <h1 class="page-title">WWebTask.mjs</h1>
+    
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>import path from 'path'
+import fs from 'fs'
+import get from 'lodash-es/get.js'
+import keys from 'lodash-es/keys.js'
+import j2o from 'wsemi/src/j2o.mjs'
+import iseobj from 'wsemi/src/iseobj.mjs'
+import isestr from 'wsemi/src/isestr.mjs'
+import ispint from 'wsemi/src/ispint.mjs'
+import isErr from 'wsemi/src/isErr.mjs'
+import isfun from 'wsemi/src/isfun.mjs'
+import ispm from 'wsemi/src/ispm.mjs'
+import cint from 'wsemi/src/cint.mjs'
+import strleft from 'wsemi/src/strleft.mjs'
+import strdelleft from 'wsemi/src/strdelleft.mjs'
+import strright from 'wsemi/src/strright.mjs'
+import strdelright from 'wsemi/src/strdelright.mjs'
+import pm2resolve from 'wsemi/src/pm2resolve.mjs'
+import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
+import fsIsFolder from 'wsemi/src/fsIsFolder.mjs'
+import fsIsFile from 'wsemi/src/fsIsFile.mjs'
+import replace from 'wsemi/src/replace.mjs'
+import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
+import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
+import procLang from './procLang.mjs'
+import procCore from './procCore.mjs'
+import srLogInit from './srLog.mjs'
+import ds from '../src/schema/index.mjs'
+
+
+/**
+ * 任務調度伺服器
+ *
+ * @class
+ * @param {Function} WOrm 輸入資料庫ORM函數
+ * @param {String} url 輸入資料庫連線字串，例如w-orm-lmdb為'./db'
+ * @param {String} db 輸入資料庫名稱字串
+ * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'
+ * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false
+ * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false
+ * @param {Object} [opt={}] 輸入設定物件，預設{}
+ * @param {Integer} [opt.serverPort=11008] 輸入伺服器通訊port，預設11008
+ * @returns {Object} 回傳物件，其內server為hapi伺服器實體
+ */
+function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser, opt = {}) {
+    let instWServHapiServer = null
+
+
+    //check WOrm
+    if (!isfun(WOrm)) {
+        console.log('invalid WOrm', WOrm)
+        throw new Error('invalid WOrm')
+    }
+
+
+    //check url
+    if (!isestr(url)) {
+        console.log('invalid url', url)
+        throw new Error('invalid url')
+    }
+
+
+    //check db
+    if (!isestr(db)) {
+        console.log('invalid db', db)
+        throw new Error('invalid db')
+    }
+
+
+    //check getUserByToken
+    if (!isfun(getUserByToken)) {
+        console.log('invalid getUserByToken', getUserByToken)
+        throw new Error('invalid getUserByToken')
+    }
+
+
+    //check verifyClientUser
+    if (!isfun(verifyClientUser)) {
+        console.log('invalid verifyClientUser', verifyClientUser)
+        throw new Error('invalid verifyClientUser')
+    }
+
+
+    //check verifyAppUser
+    if (!isfun(verifyAppUser)) {
+        console.log('invalid verifyAppUser', verifyAppUser)
+        throw new Error('invalid verifyAppUser')
+    }
+
+
+    //serverPort
+    let serverPort = get(opt, 'serverPort')
+    if (!ispint(serverPort)) {
+        serverPort = 11008
+    }
+    serverPort = cint(serverPort)
+
+
+    //useCheckUser
+    let useCheckUser = get(opt, 'useCheckUser', false)
+
+
+    //getUserById
+    let getUserById = get(opt, 'getUserById', null)
+
+
+    //useExcludeWhenNotAdmin
+    let useExcludeWhenNotAdmin = get(opt, 'useExcludeWhenNotAdmin', false)
+
+
+    //webName
+    let webName = get(opt, 'webName', {})
+
+
+    //webDescription
+    let webDescription = get(opt, 'webDescription', {})
+
+
+    //webLogo
+    let webLogo = get(opt, 'webLogo', '')
+
+
+    //subfolder
+    let subfolder = get(opt, 'subfolder', '')
+    if (isestr(subfolder)) {
+        if (strright(subfolder, 1) === '/') { //右邊不需要給「/」
+            subfolder = strdelright(subfolder, 1)
+        }
+        if (strleft(subfolder, 1) !== '/') { //左邊需要給「/」
+            subfolder = `/${subfolder}`
+        }
+    }
+
+
+    //urlRedirect
+    let urlRedirect = get(opt, 'urlRedirect', '')
+
+
+    //params
+    let showLanguage = get(opt, 'showLanguage', 'y')
+    let language = get(opt, 'language', 'eng')
+    let logFd = get(opt, 'logFd', './logs') //srLog 寫入之 log 資料夾
+
+
+    //kpLangExt
+    let kpLangExt = get(opt, 'kpLangExt', {})
+
+
+    //kpLang
+    let kpLang = procLang({ kpLangExt, webName, webDescription })
+
+
+    //WServOrm
+    let optWServOrm = {
+        useCheckUser,
+        getUserById,
+        useExcludeWhenNotAdmin,
+    }
+    let wp = {}
+    try {
+        wp = WServOrm(ds, WOrm, url, db, optWServOrm)
+    }
+    catch (err) {
+        //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動
+        console.log('WServOrm init failed', err)
+        throw err
+    }
+    let { woItems, procOrm } = wp
+
+
+    //srLog（後端 log；錯誤一律 log err-key 供識別）
+    let srLog = srLogInit(opt)
+
+    //maskTok：debug console.log 不印完整 token/authorization（憑證），僅前 4 碼 + ***
+    let maskTok = (t) => isestr(t) ? (strleft(t, 4) + '***') : t
+
+    //runApi: 統一 HTTP handler 收尾 — pm2resolve + isErr 還原 + 失敗記 srLog.error (與 kpFunExt 之 wrapErrLog 對稱)
+    let runApi = async (event, core) => {
+        let r = await pm2resolve(core)()
+        if (isErr(r.msg)) {
+            r.msg = r.msg.message
+        }
+        if (r.state !== 'success') {
+            srLog.error({ event: 'api/' + event, err: r.msg })
+        }
+        return r
+    }
+
+    //kpFunExt 邊界統一處理：成功記 info；catch 後端錯誤 → srLog 該 err-key → 原樣 re-reject。
+    //event 統一加 'kpfun-' 前綴 → 專用事件、與 api/verifyConn 區分。
+    let wrapErrLog = (event, fn) => {
+        let ev = 'kpfun-' + event
+        return async (...args) => {
+            try {
+                let result = await fn(...args)
+                srLog.info({ event: ev }) //成功也記 info
+                return result
+            }
+            catch (err) {
+                srLog.error({ event: ev, err })
+                return Promise.reject(err)
+            }
+        }
+    }
+
+
+    //kmx: per-key in-memory mutex, 同 key 序列化、不同 key 並行. 任務生命週期 critical 路徑用.
+    let kmx = pmKeyMutex()
+
+
+    //procCore
+    let pc = procCore({ woItems, procOrm, ds, srLog, kmx })
+    let { saveFile, getFileInfo, readFile, getStats } = pc
+
+
+    //封存掃描 (spec D12 方向②: 冷熱分離): 啟動後 30s 首掃 + 每小時掃一次, 將過齡終態任務/舊訊息搬至冷表.
+    //timer 註冊於此 (不放 procCore) → procCore 保持無 timer, unit 測試可獨立建構與退出.
+    //archiveAfterDays&lt;=0 停用 (archiveSweep 內亦有守衛).
+    let archiveAfterDays = cint(get(opt, 'archiveAfterDays', 30))
+    if (archiveAfterDays > 0) {
+        let lockingForArchive = false
+        let runArchiveSweep = async () => {
+            if (lockingForArchive) {
+                return
+            }
+            lockingForArchive = true
+            await pc.archiveSweep(archiveAfterDays)
+                .then((r) => {
+                    if (r.tasksMoved > 0 || r.messagesMoved > 0) {
+                        srLog.info({ event: 'archiveSweep', tasksMoved: r.tasksMoved, messagesMoved: r.messagesMoved })
+                    }
+                })
+                .catch((err) => {
+                    srLog.error({ event: 'archiveSweep-error', msg: (typeof err === 'string') ? err : ((err &amp;&amp; err.message) || 'unknown') })
+                })
+                .finally(() => {
+                    lockingForArchive = false
+                })
+        }
+        setTimeout(runArchiveSweep, 30 * 1000)
+        setInterval(runArchiveSweep, 60 * 60 * 1000)
+    }
+
+
+    //getWebInfor
+    let getWebInfor = (userId) => {
+        return {
+
+            // webName, //已併入kpLang
+            // webDescription, //已併入kpLang
+            webLogo,
+
+            showLanguage,
+            language,
+            kpLang,
+
+        }
+    }
+
+
+    //checkUser
+    let checkUser = async(user) => {
+        let id = get(user, 'id', '')
+        if (!isestr(id)) {
+            console.log('user', user)
+            console.log('can not get the userId')
+            return Promise.reject('errUserIdMissing')
+        }
+        let email = get(user, 'email', '')
+        if (!isestr(email)) {
+            console.log('user', user)
+            console.log('can not get the email of user')
+            return Promise.reject('errUserEmailMissing')
+        }
+        let name = get(user, 'name', '')
+        if (!isestr(name)) {
+            console.log('user', user)
+            console.log('can not get userName')
+            return Promise.reject('errUserNameMissing')
+        }
+        let isAdmin = get(user, 'isAdmin', '')
+        if (isAdmin !== 'y' &amp;&amp; isAdmin !== 'n') {
+            console.log('user', user)
+            console.log('user.isAdmin is not y or n', user.isAdmin)
+            console.log('can not get the role of user')
+            return Promise.reject('errUserRoleMissing')
+        }
+        return true
+    }
+
+
+    //getTokenUser
+    let getTokenUser = async (token) => {
+
+        //getUserByToken
+        let userSelf = getUserByToken(token)
+        if (ispm(userSelf)) {
+            userSelf = await userSelf
+        }
+
+        //check
+        if (true) {
+            await checkUser(userSelf)
+        }
+
+        return userSelf
+    }
+
+
+    //p
+    let p = {
+        checkToken: async(token) => {
+
+            //getUserByToken
+            let u = await getUserByToken(token)
+
+            //checkUser
+            await checkUser(u)
+
+            return true
+        },
+    }
+
+
+    //getAndVerifyClientUser
+    let getAndVerifyClientUser = async (token, from = '') => {
+
+        //getTokenUser
+        let user = await getTokenUser(token)
+
+        //verifyClientUser
+        let b = verifyClientUser(user, from)
+        if (ispm(b)) {
+            b = await b
+        }
+
+        //check
+        if (!b) {
+            console.log('user', user)
+            console.log(`user does not have permission`)
+            return Promise.reject('errUserNoPermission')
+        }
+
+        srLog.info({ event: 'verifyClientUser', from, userId: get(user, 'id', '') }) //瀏覽使用者驗證通過
+        return user
+    }
+
+
+    //getAndVerifyAppUser
+    let getAndVerifyAppUser = async (token, from = '') => {
+
+        //user
+        let user = null
+        if (isestr(token)) {
+            user = getUserByToken(token)
+            if (ispm(user)) {
+                user = await user
+            }
+        }
+
+        //check
+        if (!iseobj(user)) {
+            console.log(`token`, maskTok(token))
+            console.log(`can not find the user from token`)
+            return Promise.reject('errUserNotFound')
+        }
+
+        //checkUser: 與 client 路徑對稱 (id/email/name/isAdmin 缺一即拒).
+        //agent 建議以 SSO app token (isApp='y') 認證, 其解析之虛擬使用者四欄皆為非空占位值, 不受本檢查影響.
+        await checkUser(user)
+
+        //verifyAppUser
+        let b = verifyAppUser(user, from)
+        if (ispm(b)) {
+            b = await b
+        }
+
+        //check
+        if (!b) {
+            console.log('user', user)
+            console.log(`user does not have permission`)
+            return Promise.reject('errUserNoPermission')
+        }
+
+        srLog.info({ event: 'verifyAppUser', from, userId: get(user, 'id', '') }) //應用程式使用者驗證通過
+        return user
+    }
+
+
+    //parsePayload
+    let parsePayload = async (req) => {
+
+        //payload
+        let payload = get(req, 'payload')
+
+        //to obj
+        if (isestr(payload)) {
+            payload = j2o(payload)
+        }
+
+        //check
+        if (!iseobj(payload)) {
+            console.log('payload', payload)
+            console.log(`invalid payload in req`)
+            return Promise.reject('errPayloadInvalid')
+        }
+
+        return payload
+    }
+
+
+    //pathStaticFiles
+    let pathStaticFiles = 'dist'
+    let npmPathStaticFiles = './node_modules/w-web-task/dist'
+    if (fsIsFolder(npmPathStaticFiles)) {
+        pathStaticFiles = npmPathStaticFiles
+    }
+
+
+    //subfolder 注入: index.tmp → index.html
+    let fnEntryIn = 'index.tmp'
+    let fnEntryOut = 'index.html'
+    try {
+        let fpEntryIn = path.resolve(pathStaticFiles, fnEntryIn)
+        if (!fsIsFile(fpEntryIn)) {
+            fpEntryIn = path.resolve(pathStaticFiles, fnEntryOut) //本機開發另使用html替代tmp
+        }
+        if (!fsIsFile(fpEntryIn)) {
+            console.log('fpEntryIn', fpEntryIn)
+            throw new Error(`invalid fpEntryIn`)
+        }
+        let fpEntryOut = path.resolve(pathStaticFiles, fnEntryOut)
+        let c = fs.readFileSync(fpEntryIn, 'utf8')
+        c = replace(c, '/mtask/', '{sfd}/') //方法同genEntry
+        c = replace(c, '{sfd}', subfolder)
+        c = replace(c, '{urlRedirect}', urlRedirect)
+        c = replace(c, '{language}', language) //注入初始語系 → window.___pmwtask___.language
+        fs.writeFileSync(fpEntryOut, c, 'utf8')
+    }
+    catch (err) {
+        console.log(err)
+        console.log(`can not generate ${fnEntryOut}`)
+    }
+
+
+    //apis (對外 agent 面 = HTTP REST). token 由 GET ?token= 或 POST payload 帶入; getAndVerifyAppUser 守門.
+    let apis = [
+
+        {
+            method: 'GET',
+            path: '/api/getUserByToken', //未登入主頁時需先檢測token, getUserByToken為w-ui-loginout預設值
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //check
+                    if (!isestr(token)) {
+                        console.log('req.query', get(req, 'query'))
+                        console.log('token', maskTok(token))
+                        console.log('[API]getUserByToken/check token: invalid token')
+                        return Promise.reject('errTokenNoPermission')
+                    }
+
+                    //getAndVerifyClientUser
+                    let user = await getAndVerifyClientUser(token, 'getUserByToken')
+
+                    //check
+                    if (!iseobj(user)) {
+                        console.log('token', maskTok(token))
+                        console.log('[API]getUserByToken/check user: invalid user')
+                        return Promise.reject('errTokenNoPermission')
+                    }
+
+                    srLog.info({ event: 'api/getUserByToken', userId: get(user, 'id', '') })
+                    return user
+                }
+
+                return await runApi('getUserByToken', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getChannels', //查頻道清單 (可依主責 agent 過濾)
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getChannels')
+                    let userId = get(user, 'id', '')
+
+                    //agentId (查詢過濾參數)
+                    let agentId = get(req, 'query.agentId', '')
+
+                    //getChannelsList
+                    let r = await pc.getChannelsList(userId, agentId)
+
+                    srLog.info({ event: 'api/getChannels', userId })
+                    return r
+                }
+
+                return await runApi('getChannels', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getRecentMessages', //查頻道訊息
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getRecentMessages')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let channelId = get(req, 'query.channelId', '')
+                    let n = cint(get(req, 'query.n', 20))
+                    let afterId = get(req, 'query.afterId', '')
+
+                    //getMessages
+                    let r = await pc.getMessages(userId, channelId, n, afterId)
+
+                    srLog.info({ event: 'api/getRecentMessages', userId })
+                    return r
+                }
+
+                return await runApi('getRecentMessages', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getRecentTasks', //查頻道任務
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getRecentTasks')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let channelId = get(req, 'query.channelId', '')
+                    let n = cint(get(req, 'query.n', 20))
+                    let state = get(req, 'query.state', '')
+                    let order = get(req, 'query.order', 'desc')
+
+                    //getTasks
+                    let r = await pc.getTasks(userId, channelId, n, state, order)
+
+                    srLog.info({ event: 'api/getRecentTasks', userId })
+                    return r
+                }
+
+                return await runApi('getRecentTasks', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getArchivedTasks', //查頻道封存任務 (冷表, 稽核/回顧用; 見 spec D12)
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getArchivedTasks')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let channelId = get(req, 'query.channelId', '')
+                    let n = cint(get(req, 'query.n', 20))
+                    let order = get(req, 'query.order', 'desc')
+
+                    //getArchivedTasks
+                    let r = await pc.getArchivedTasks(userId, channelId, n, order)
+
+                    srLog.info({ event: 'api/getArchivedTasks', userId })
+                    return r
+                }
+
+                return await runApi('getArchivedTasks', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getArchivedMessages', //查頻道封存訊息 (冷表, 稽核用; 見 spec D12)
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getArchivedMessages')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let channelId = get(req, 'query.channelId', '')
+                    let n = cint(get(req, 'query.n', 20))
+
+                    //getArchivedMessages
+                    let r = await pc.getArchivedMessages(userId, channelId, n)
+
+                    srLog.info({ event: 'api/getArchivedMessages', userId })
+                    return r
+                }
+
+                return await runApi('getArchivedMessages', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getTask', //查單一任務
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getTask')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let taskId = get(req, 'query.taskId', '')
+
+                    //getTask
+                    let r = await pc.getTask(userId, taskId)
+
+                    srLog.info({ event: 'api/getTask', userId })
+                    return r
+                }
+
+                return await runApi('getTask', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/postMessage', //傳訊至頻道 (asTask=true 同時開任務)
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'postMessage')
+                    let userId = get(user, 'id', '')
+
+                    let channelId = get(payload, 'channelId', '')
+                    let content = get(payload, 'content', '')
+                    let opt = {
+                        asTask: get(payload, 'asTask', false),
+                        title: get(payload, 'title', ''),
+                        senderType: get(payload, 'senderType', 'human'),
+                        attachments: get(payload, 'attachments', []),
+                    }
+
+                    //postMessage
+                    let r = await pc.postMessage(userId, channelId, content, opt)
+
+                    srLog.info({ event: 'api/postMessage', userId })
+                    return r
+                }
+
+                return await runApi('postMessage', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/claimTask', //認領任務
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'claimTask')
+                    let userId = get(user, 'id', '')
+
+                    let taskId = get(payload, 'taskId', '')
+
+                    //claimTask
+                    let r = await pc.claimTask(userId, taskId)
+
+                    srLog.info({ event: 'api/claimTask', userId })
+                    return r
+                }
+
+                return await runApi('claimTask', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/respondTask', //回應任務 (唯一終態入口)
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'respondTask')
+                    let userId = get(user, 'id', '')
+
+                    let taskId = get(payload, 'taskId', '')
+                    let result = get(payload, 'result', '')
+                    let state = get(payload, 'state', 'done')
+                    let errorKey = get(payload, 'errorKey', '')
+
+                    //respondTask (不傳 senderType → 預設 'agent')
+                    let r = await pc.respondTask(userId, taskId, result, state, errorKey)
+
+                    srLog.info({ event: 'api/respondTask', userId })
+                    return r
+                }
+
+                return await runApi('respondTask', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/resetTask', //重置任務
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'resetTask')
+                    let userId = get(user, 'id', '')
+
+                    let taskId = get(payload, 'taskId', '')
+
+                    //resetTask
+                    let r = await pc.resetTask(userId, taskId)
+
+                    srLog.info({ event: 'api/resetTask', userId })
+                    return r
+                }
+
+                return await runApi('resetTask', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/ackChannel', //推進已讀游標
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'ackChannel')
+                    let userId = get(user, 'id', '')
+
+                    let channelId = get(payload, 'channelId', '')
+                    let lastMessageId = get(payload, 'lastMessageId', '')
+
+                    //ackChannel
+                    let r = await pc.ackChannel(userId, channelId, lastMessageId)
+
+                    srLog.info({ event: 'api/ackChannel', userId })
+                    return r
+                }
+
+                return await runApi('ackChannel', core)
+            },
+        },
+
+        {
+            method: 'POST',
+            path: '/api/uploadFile', //上傳檔案至圖台 → 回 file id/meta
+            //放寬 payload 上限至 20MB: Hapi 預設 maxBytes=1MB, 而 base64 膨脹 ~33%, 真實截圖 (數 MB) 會 413;
+            //此 route 收圖檔故須拉高 (前端 kpFunExt 走 WebSocket 不受此限, 僅對外 HTTP /api/uploadFile 需設).
+            options: {
+                payload: {
+                    maxBytes: 20 * 1024 * 1024,
+                },
+            },
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //payload (先 parse, token 可在 query 或 payload)
+                    let payload = await parsePayload(req)
+                    let token = get(req, 'query.token', '') || get(payload, 'token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'uploadFile')
+                    let userId = get(user, 'id', '')
+
+                    let name = get(payload, 'name', '')
+                    let type = get(payload, 'type', '')
+                    let dataBase64 = get(payload, 'dataBase64', '')
+
+                    //saveFile
+                    let r = await pc.saveFile(userId, { name, type, dataBase64 })
+
+                    srLog.info({ event: 'api/uploadFile', userId })
+                    return r
+                }
+
+                return await runApi('uploadFile', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getFileInfo', //查檔案 metadata
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getFileInfo')
+                    let userId = get(user, 'id', '')
+
+                    //params
+                    let id = get(req, 'query.id', '')
+
+                    //getFileInfo
+                    let r = await pc.getFileInfo(userId, id)
+
+                    srLog.info({ event: 'api/getFileInfo', userId })
+                    return r
+                }
+
+                return await runApi('getFileInfo', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getStats', //系統統計
+            handler: async function (req, res) {
+
+                async function core() {
+
+                    //token
+                    let token = get(req, 'query.token', '')
+
+                    //getAndVerifyAppUser
+                    let user = await getAndVerifyAppUser(token, 'getStats')
+                    let userId = get(user, 'id', '')
+
+                    //getStats
+                    let r = await pc.getStats(userId)
+
+                    srLog.info({ event: 'api/getStats', userId })
+                    return r
+                }
+
+                return await runApi('getStats', core)
+            },
+        },
+
+        {
+            method: 'GET',
+            path: '/api/getFile', //串流檔案 bytes (看圖/下載); 二進位回傳, 不走 runApi/pm2resolve
+            handler: async function (req, res) {
+
+                let token = get(req, 'query.token', '')
+                let id = get(req, 'query.id', '')
+                try {
+                    let user = await getAndVerifyAppUser(token, 'getFile')
+                    let r = await readFile(id)
+                    srLog.info({ event: 'api/getFile', userId: get(user, 'id', '') })
+                    //安全: 僅白名單點陣圖類型可用原 Content-Type 以 inline 呈現 (聊天 &lt;img> 需求);
+                    //其餘 (含 text/html, image/svg+xml 等可挾帶 script 之類型) 一律強制 application/octet-stream + attachment 下載,
+                    //避免上傳惡意 HTML/SVG 後經 getFile 於本站原點 inline 渲染造成 XSS. 並加 nosniff 禁瀏覽器 MIME 嗅探.
+                    let safeInlineTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/bmp', 'image/avif']
+                    let fileType = r.info.type || ''
+                    let inline = safeInlineTypes.includes(fileType)
+                    let fname = encodeURIComponent(r.info.name || id)
+                    return res.response(r.buf)
+                        .type(inline ? fileType : 'application/octet-stream')
+                        .header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${fname}"`)
+                        .header('X-Content-Type-Options', 'nosniff')
+                }
+                catch (err) {
+                    let key = isestr(err) ? err : get(err, 'message', 'errFileNotFound')
+                    srLog.error({ event: 'api/getFile', err: key })
+                    return res.response(JSON.stringify({ state: 'error', msg: key })).code(404).type('application/json')
+                }
+            },
+        },
+
+    ]
+
+
+    //tableNamesExec, tableNamesSync
+    //ORM 直通寫入僅開放純 CRUD 表 (channels/channelMembers); tasks/messages 之生命週期/原子寫入一律走 kpFunExt 業務函式
+    //(對應 spec 設計總覽 §6.2 註 與 設計要點與取捨 D2), 避免前端 ORM 直寫繞過 kmx + 狀態守衛 + 身分權威.
+    //tableNamesSync 須與 tableNamesExec 對齊: 同步引擎收到某表 tag 變更時會呼叫 kpExec[table].select() 去重抓,
+    //若把無 exec binding 的 messages/tasks 放進 sync, client refreshTable 找不到 kpExec[messages]/[tasks] →
+    //每次變更 emit error + 洩漏未解 promise + 該表 tag 永不更新. messages/tasks 前端一律走 $fapi getMessages/getTasks
+    //按需拉取 (非 ORM change 推送), 故不放進 sync.
+    let tableNamesExec = ['channels', 'channelMembers']
+    let tableNamesSync = tableNamesExec
+
+
+    //WServHapiServer
+    instWServHapiServer = new WServHapiServer({
+        port: serverPort, //用已驗證 + 預設化 (ispint→預設 11008→cint) 之 serverPort, 非原始 opt.serverPort
+        pathStaticFiles,
+        apiName: 'api',
+        apis,
+        tokenType: 'Bearer',
+        verifyConn: async ({ apiType, authorization, query, headers, req }) => {
+
+            //token
+            let token = strdelleft(authorization, 7) //刪除Bearer
+
+            //check
+            if (!isestr(token)) {
+                console.log('apiType', apiType)
+                console.log('authorization', maskTok(authorization))
+                console.log('invalid token')
+                return false
+            }
+
+            //checkToken：套件層連線閘僅做「token 認證」(解析 user + 驗欄位齊備). 授權屬套件使用者責任.
+            let b = await p.checkToken(token)
+
+            srLog.info({ event: 'verifyConn', apiType }) //連線之 token 認證通過
+            return b
+        },
+        getUserIdByToken: async (token) => { //可使用async或sync函數
+            if (!isestr(token)) {
+                return ''
+            }
+            let user = await getUserByToken(token)
+            let userId = get(user, 'id', '')
+            return userId
+        },
+        useDbOrm: true,
+        kpOrm: woItems,
+        operOrm: procOrm, //procOrm的輸入為: userId, tableName, methodName, input
+        tableNamesExec,
+        methodsExec: ['select', 'insert', 'save', 'del'], //mix需於procOrm內註冊以提供
+        tableNamesSync,
+        kpFunExt: { //接收參數第1個為userId, 之後才是前端給予參數 (皆經 wrapErrLog)
+
+            getWebInfor: wrapErrLog('getWebInfor', getWebInfor),
+
+            getChannelsList: wrapErrLog('getChannelsList', (userId) => pc.getChannelsList(userId)),
+            saveChannel: wrapErrLog('saveChannel', (userId, row) => pc.saveChannel(userId, row)),
+            deleteChannel: wrapErrLog('deleteChannel', (userId, id) => pc.deleteChannel(userId, id)),
+
+            getChannelMembers: wrapErrLog('getChannelMembers', (userId, channelId) => pc.getChannelMembers(userId, channelId)),
+            saveChannelMember: wrapErrLog('saveChannelMember', (userId, row) => pc.saveChannelMember(userId, row)),
+            deleteChannelMember: wrapErrLog('deleteChannelMember', (userId, id) => pc.deleteChannelMember(userId, id)),
+
+            getMessages: wrapErrLog('getMessages', (userId, channelId, n, afterId) => pc.getMessages(userId, channelId, n, afterId)),
+            postMessage: wrapErrLog('postMessage', (userId, channelId, content, opt) => pc.postMessage(userId, channelId, content, opt)),
+
+            getTasks: wrapErrLog('getTasks', (userId, channelId, n, state, order) => pc.getTasks(userId, channelId, n, state, order)),
+            getArchivedTasks: wrapErrLog('getArchivedTasks', (userId, channelId, n, order) => pc.getArchivedTasks(userId, channelId, n, order)),
+            getArchivedMessages: wrapErrLog('getArchivedMessages', (userId, channelId, n) => pc.getArchivedMessages(userId, channelId, n)),
+            getTask: wrapErrLog('getTask', (userId, taskId) => pc.getTask(userId, taskId)),
+            claimTask: wrapErrLog('claimTask', (userId, taskId) => pc.claimTask(userId, taskId)),
+            respondTask: wrapErrLog('respondTask', (userId, taskId, result, state, errorKey, senderType) => pc.respondTask(userId, taskId, result, state, errorKey, senderType)),
+            resetTask: wrapErrLog('resetTask', (userId, taskId) => pc.resetTask(userId, taskId)),
+            ackChannel: wrapErrLog('ackChannel', (userId, channelId, lastMessageId) => pc.ackChannel(userId, channelId, lastMessageId)),
+
+            uploadFile: wrapErrLog('uploadFile', (userId, inp) => pc.saveFile(userId, inp)),
+            getFileInfo: wrapErrLog('getFileInfo', (userId, id) => pc.getFileInfo(userId, id)),
+            getStats: wrapErrLog('getStats', (userId) => pc.getStats(userId)),
+
+        },
+        fnTableTags: 'tableTags-web-task.json',
+    })
+
+
+    return instWServHapiServer
+}
+
+
+export default WWebTask
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+    
+    
+</div>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Thu Jul 23 2026 11:20:56 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+</footer>
+
+<script>prettyPrint();</script>
+<script src="scripts/polyfill.js"></script>
+<script src="scripts/linenumber.js"></script>
+
+
+
+</body>
+</html>
