@@ -1,6 +1,6 @@
 {
   "name": "w-web-task",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "@mdi/js": "^7.4.47",
@@ -12,7 +12,7 @@
     "w-aggrid-vue": "^2.0.58",
     "w-component-vue": "^2.4.74",
     "w-data-collector": "^1.0.23",
-    "w-serv-hapi": "^1.0.73",
+    "w-serv-hapi": "^1.0.74",
     "w-serv-orm": "^1.0.40",
     "w-syslog": "^1.0.10",
     "w-ui-loginout": "^1.0.11",
