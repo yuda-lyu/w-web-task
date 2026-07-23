@@ -1,0 +1,21 @@
+{
+    // 應用層設定（JSON5 格式：可加註解）。
+    // db 連線等系統參數仍在 g.getSettings.mjs（供 g.mOrm 共用）；本檔放可調整之 app 設定。
+    // srv.mjs 以 `node srv.mjs <pathSettings>` 載入本檔（預設 ./settings.json），供日後更細緻功能擴充。
+
+    // 是否顯示右上語系切換選單：'y' 顯示 / 'n' 隱藏
+    showLanguage: 'y',
+
+    // 初始語系（server 注入 index.html → 首次載入即此語系）：'eng' / 'cht'
+    language: 'eng',
+
+    // 伺服器通訊 port
+    serverPort: 11008,
+    
+    logFd: './logs',
+    logInterval: 'hr',
+
+    // 封存機制：終態(done/error)任務與舊訊息逾此天數自動搬至冷表(tasksArchive/messagesArchive)；<=0 停用
+    archiveAfterDays: 30,
+
+}

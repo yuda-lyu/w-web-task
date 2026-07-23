@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>w-web-task UI · editorial</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
+<style>
+:root{
+  /* surfaces & ink */
+  --bg:#fafaf9;            /* 暖白紙感 */
+  --surface:#ffffff;
+  --rail:#111111;          /* 近黑 rail */
+  --border:#e7e5e4;        /* stone */
+  --border-2:#d6d3d1;
+  --text:#0a0a0a;
+  --text-2:#57534e;        /* stone 600 */
+  --text-3:#a8a29e;        /* stone 400 暖灰 */
+  /* accent */
+  --accent:#0d9488;        /* 深翠青 teal */
+  --accent-700:#0f766e;
+  --accent-soft:#ccfbf1;
+  --accent-tint:#f0fdfa;
+  /* 語意狀態色 */
+  --st-pending:#78716c;
+  --st-running:#2563eb;
+  --st-done:#16a34a;
+  --st-error:#dc2626;
+  /* shape — 銳利, 小圓角 */
+  --radius:6px;
+  --radius-sm:4px;
+  --font:'微軟正黑體','Microsoft JhengHei','Noto Sans TC',Avenir,Helvetica,sans-serif;
+  --shadow-sm:0 1px 1px rgba(10,10,10,.04);
+  --shadow:0 6px 24px rgba(10,10,10,.07);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);color:var(--text);background:var(--bg);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.app{display:flex;height:100vh;overflow:hidden}
+
+/* ───────────────── 左1 rail (近黑) ───────────────── */
+.rail{width:70px;background:var(--rail);display:flex;flex-direction:column;align-items:center;padding:12px 0;flex-shrink:0;border-right:1px solid #000}
+.rail .logo{width:38px;height:38px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:21px;margin-bottom:20px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.rail .nav{display:flex;flex-direction:column;gap:4px;width:100%;align-items:center}
+.rail .item{width:56px;height:54px;border-radius:var(--radius);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#8a8782;cursor:pointer;position:relative;transition:color .12s,background .12s}
+.rail .item .mdi{font-size:21px}
+.rail .item .lb{font-size:10px;letter-spacing:.4px;font-weight:600}
+.rail .item:hover{background:#1c1c1c;color:#e7e5e4}
+.rail .item.active{background:#1c1c1c;color:#fff}
+.rail .item.active::before{content:"";position:absolute;left:-12px;top:13px;bottom:13px;width:3px;border-radius:0 2px 2px 0;background:var(--accent)}
+.rail .spacer{flex:1}
+.rail .avatar{width:36px;height:36px;border-radius:8px;background:#2a2a2a;color:#e7e5e4;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;border:1px solid #3a3a3a}
+
+/* ───────────────── 左2 頻道樹 ───────────────── */
+.tree-panel{width:282px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.tree-head{padding:16px 16px 8px}
+.tree-head h2{font-size:15px;font-weight:800;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;text-transform:none}
+.tree-head h2 .mdi{color:var(--accent);font-size:18px}
+.search{margin:6px 14px 8px;position:relative}
+.search .mdi{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-3);font-size:16px}
+.search input{width:100%;padding:7px 10px 7px 30px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;background:var(--bg);outline:none;transition:border-color .12s,box-shadow .12s,background .12s}
+.search input::placeholder{color:var(--text-3)}
+.search input:focus{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+.tree{flex:1;overflow-y:auto;padding:4px 8px 14px}
+.tproj{margin-top:2px}
+.tnode{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-2);font-size:12.5px;user-select:none}
+.tnode:hover{background:var(--bg)}
+.tnode .caret{color:var(--text-3);font-size:17px;width:17px;transition:transform .12s}
+.tnode.proj-row{font-weight:800;color:var(--text);font-size:12.5px;letter-spacing:-.01em;text-transform:uppercase}
+.tnode.proj-row{letter-spacing:.04em;font-size:11.5px;color:var(--text-2)}
+.tnode.group-row{font-weight:700;color:var(--text-2);padding-left:14px;font-size:12.5px}
+.tnode .grp-ic{color:var(--text-3);font-size:15px}
+.chan{display:flex;align-items:center;gap:7px;padding:5px 8px 5px 37px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-2);font-size:12.5px;position:relative}
+.chan:hover{background:var(--bg)}
+.chan.active{background:var(--accent-tint);color:var(--accent-700);font-weight:700;box-shadow:inset 2px 0 0 var(--accent)}
+.chan.active .hash{color:var(--accent)}
+.chan .hash{color:var(--text-3);font-size:13px;font-weight:700}
+.chan .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chan .dot{width:6px;height:6px;border-radius:50%;background:var(--st-done);box-shadow:0 0 0 2px #fff}
+.chan .badge{background:var(--accent);color:#fff;font-size:10px;font-weight:800;min-width:17px;height:17px;border-radius:4px;display:flex;align-items:center;justify-content:center;padding:0 5px;letter-spacing:.02em}
+
+/* ───────────────── 主內容 ───────────────── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.ch-head{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 22px;display:flex;align-items:center;gap:13px}
+.ch-head .title{font-size:18px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:6px}
+.ch-head .title .hash{color:var(--text-3);font-weight:700}
+.ch-head .desc{color:var(--text-2);font-size:12px;border-left:1px solid var(--border-2);padding-left:13px;letter-spacing:.01em}
+.ch-head .spacer{flex:1}
+.agent-chip{display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border-2);padding:3px 11px 3px 4px;border-radius:var(--radius);font-size:12px;color:var(--text-2);font-weight:600}
+.agent-chip .av{width:22px;height:22px;border-radius:var(--radius-sm);background:var(--rail);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.agent-chip .dot{width:6px;height:6px;border-radius:50%;background:var(--st-done)}
+.tstats{display:flex;gap:5px}
+.pill{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 9px;border-radius:var(--radius-sm);background:var(--surface);color:var(--text-2);border:1px solid var(--border);letter-spacing:.01em}
+.pill .d{width:6px;height:6px;border-radius:50%}
+.pill.pending .d{background:var(--st-pending)} .pill.running .d{background:var(--st-running)} .pill.done .d{background:var(--st-done)}
+
+.timeline{flex:1;overflow-y:auto;padding:20px 26px;display:flex;flex-direction:column;gap:14px}
+.day{align-self:center;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-3);background:var(--surface);border:1px solid var(--border);padding:3px 13px;border-radius:20px;text-transform:uppercase}
+.msg{display:flex;gap:10px;max-width:72%}
+.msg.me{align-self:flex-end;flex-direction:row-reverse}
+.msg .av{width:32px;height:32px;border-radius:var(--radius);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff}
+.msg.human .av{background:#44403c} .msg.me .av{background:var(--rail)} .msg.agent .av{background:var(--accent)}
+.bubble{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 13px;box-shadow:var(--shadow-sm)}
+.msg.me .bubble{background:var(--accent-tint);border-color:var(--accent-soft)}
+.msg.agent .bubble{background:#fff}
+.bubble .meta{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.bubble .who{font-size:12.5px;font-weight:800;letter-spacing:-.01em}
+.bubble .tm{font-size:10.5px;color:var(--text-3);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.kbadge{font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:3px;color:#fff;letter-spacing:.06em;text-transform:uppercase}
+.kbadge.task{background:var(--accent)} .kbadge.reply{background:var(--st-done)}
+.bubble .body{font-size:13px;color:var(--text-2);line-height:1.55}
+.bubble .body p{margin:2px 0}
+.bubble .body b{color:var(--text);font-weight:800}
+.bubble.taskcard{border-color:var(--accent-soft);background:var(--accent-tint)}
+.bubble.replycard{border-color:#bbf7d0;background:#f0fdf4}
+.mini-table{border-collapse:collapse;margin-top:7px;font-size:12px}
+.mini-table td,.mini-table th{border:1px solid var(--border-2);padding:4px 11px}
+.mini-table th{background:rgba(0,0,0,.03);font-weight:700;color:var(--text);letter-spacing:.01em}
+.mini-table td{font-variant-numeric:tabular-nums}
+.imgs{display:flex;gap:8px;margin-top:9px}
+.imgs .ph{width:140px;height:90px;border-radius:var(--radius-sm);border:1px solid var(--border-2);background:repeating-linear-gradient(45deg,#f5f5f4,#f5f5f4 8px,#eeece9 8px,#eeece9 16px);display:flex;align-items:center;justify-content:center;color:var(--text-2);font-size:11.5px;gap:5px;font-weight:600}
+.imgs .ph .mdi{font-size:16px;color:var(--text-3)}
+
+/* ───────────────── composer ───────────────── */
+.composer{padding:10px 26px 18px}
+.composer .box{background:var(--surface);border:1px solid var(--border-2);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;transition:border-color .12s,box-shadow .12s}
+.composer .box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow)}
+.previews{display:flex;gap:9px;padding:11px 13px 0}
+.previews .thumb{width:60px;height:60px;border-radius:var(--radius-sm);border:1px solid var(--border-2);background:repeating-linear-gradient(45deg,#f5f5f4,#f5f5f4 6px,#eeece9 6px,#eeece9 12px);position:relative;display:flex;align-items:center;justify-content:center;color:var(--text-3)}
+.previews .thumb .mdi:not(.x){font-size:20px}
+.previews .thumb .x{position:absolute;top:-7px;right:-7px;width:19px;height:19px;border-radius:50%;background:var(--rail);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;border:2px solid #fff}
+.composer textarea{width:100%;border:none;outline:none;resize:none;padding:12px 15px 6px;font-family:inherit;font-size:13.5px;color:var(--text);background:transparent;height:52px;line-height:1.5}
+.composer textarea::placeholder{color:var(--text-3)}
+.composer .bar{display:flex;align-items:center;padding:5px 10px 9px;gap:5px}
+.composer .tool{width:32px;height:32px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:var(--text-2);cursor:pointer;font-size:19px;transition:background .12s,color .12s}
+.composer .tool:hover{background:var(--bg);color:var(--text)}
+.toggle{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-2);cursor:pointer;padding:0 8px;font-weight:600}
+.toggle .sw{width:32px;height:18px;border-radius:9px;background:var(--accent);position:relative;transition:.15s}
+.toggle .sw::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.composer .spacer{flex:1}
+.hint{font-size:11px;color:var(--text-3);padding-right:6px;letter-spacing:.01em}
+.send{background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 17px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;transition:background .12s;letter-spacing:.01em}
+.send .mdi{font-size:16px}
+.send:hover{background:var(--accent-700)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 左1 rail -->
+  <nav class="rail">
+    <div class="logo"><span class="mdi mdi-clipboard-flow-outline"></span></div>
+    <div class="nav">
+      <div class="item"><span class="mdi mdi-chart-box-outline"></span><span class="lb">統計</span></div>
+      <div class="item active"><span class="mdi mdi-forum-outline"></span><span class="lb">頻道</span></div>
+      <div class="item"><span class="mdi mdi-cog-outline"></span><span class="lb">後台</span></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="avatar">管</div>
+  </nav>
+
+  <!-- 左2 頻道樹 -->
+  <aside class="tree-panel">
+    <div class="tree-head"><h2><span class="mdi mdi-forum-outline"></span>頻道</h2></div>
+    <div class="search"><span class="mdi mdi-magnify"></span><input placeholder="搜尋頻道 / 專案…"></div>
+    <div class="tree">
+      <div class="tproj">
+        <div class="tnode proj-row"><span class="mdi mdi-menu-down caret"></span><span class="mdi mdi-folder-outline grp-ic"></span>電商平台改版</div>
+        <div class="tnode group-row"><span class="mdi mdi-menu-down caret"></span><span class="mdi mdi-folder-outline grp-ic"></span>後端組</div>
+        <div class="chan active"><span class="hash mdi mdi-pound"></span><span class="nm">訂單服務</span><span class="dot" title="agent 在線"></span><span class="badge">3</span></div>
+        <div class="chan"><span class="hash mdi mdi-pound"></span><span class="nm">金流串接</span><span class="dot"></span></div>
+        <div class="tnode group-row"><span class="mdi mdi-menu-right caret"></span><span class="mdi mdi-folder-outline grp-ic"></span>前端組</div>
+      </div>
+      <div class="tproj">
+        <div class="tnode proj-row"><span class="mdi mdi-menu-down caret"></span><span class="mdi mdi-folder-outline grp-ic"></span>數據平台</div>
+        <div class="chan"><span class="hash mdi mdi-pound"></span><span class="nm">ETL 管線</span><span class="dot" style="background:var(--border-2)"></span></div>
+        <div class="chan"><span class="hash mdi mdi-pound"></span><span class="nm">報表產製</span><span class="dot"></span><span class="badge">1</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主內容 -->
+  <main class="main">
+    <header class="ch-head">
+      <div class="title"><span class="hash mdi mdi-pound"></span>訂單服務</div>
+      <div class="desc">電商平台改版 · 後端組</div>
+      <div class="spacer"></div>
+      <div class="tstats">
+        <span class="pill pending"><span class="d"></span>待處理 3</span>
+        <span class="pill running"><span class="d"></span>處理中 1</span>
+        <span class="pill done"><span class="d"></span>已完成 12</span>
+      </div>
+      <div class="agent-chip"><span class="av">A</span><span class="dot"></span>order-agent</div>
+    </header>
+
+    <section class="timeline">
+      <div class="day">今天</div>
+
+      <div class="msg human">
+        <div class="av">王</div>
+        <div class="bubble">
+          <div class="meta"><span class="who">王經理</span><span class="tm">09:12</span></div>
+          <div class="body"><p>order-agent 早，今天先看一下退款流程的逾時問題。</p></div>
+        </div>
+      </div>
+
+      <div class="msg agent">
+        <div class="av">A</div>
+        <div class="bubble">
+          <div class="meta"><span class="who">order-agent</span><span class="tm">09:12</span></div>
+          <div class="body"><p>收到，我先抓最近的逾時樣本。有需要我直接開成任務追蹤嗎？</p></div>
+        </div>
+      </div>
+
+      <div class="msg human">
+        <div class="av">王</div>
+        <div class="bubble taskcard">
+          <div class="meta"><span class="who">王經理</span><span class="kbadge task">任務</span><span class="tm">09:14</span></div>
+          <div class="body">
+            <p><b>整理退款逾時樣本並提出修正</b></p>
+            <p>— 近 7 天逾時清單<br>— 找出共同原因<br>— 提一版修正方案</p>
+            <div class="imgs"><div class="ph"><span class="mdi mdi-image-outline"></span>逾時截圖.png</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg agent">
+        <div class="av">A</div>
+        <div class="bubble replycard">
+          <div class="meta"><span class="who">order-agent</span><span class="kbadge reply">任務回應</span><span class="tm">09:41</span></div>
+          <div class="body">
+            <p><b>已完成</b> — 共 23 筆逾時，集中在第三方金流回呼延遲。</p>
+            <table class="mini-table"><tr><th>原因</th><th>佔比</th></tr><tr><td>金流回呼延遲</td><td>78%</td></tr><tr><td>DB 鎖等待</td><td>14%</td></tr></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="composer">
+      <div class="box">
+        <div class="previews">
+          <div class="thumb"><span class="mdi mdi-image"></span><span class="x mdi mdi-close"></span></div>
+          <div class="thumb"><span class="mdi mdi-image"></span><span class="x mdi mdi-close"></span></div>
+        </div>
+        <textarea placeholder="輸入訊息…  可直接貼上多張圖片　(Enter 發送，Shift+Enter 換行)"></textarea>
+        <div class="bar">
+          <div class="tool" title="附加圖片"><span class="mdi mdi-image-plus-outline"></span></div>
+          <div class="toggle"><span class="sw"></span>開成任務</div>
+          <div class="spacer"></div>
+          <span class="hint">Enter 發送</span>
+          <button class="send"><span class="mdi mdi-send"></span>發送</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

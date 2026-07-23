@@ -1,0 +1,17 @@
+node_modules
+.opencode
+.claude
+CLAUDE.md
+CLAUDE_settings.md
+.env
+
+_logs
+db
+uploadTemp
+testPending
+user_data
+
+tmp
+
+test
+spec
