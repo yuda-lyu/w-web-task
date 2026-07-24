@@ -1,6 +1,6 @@
 {
   "name": "w-web-task",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "@mdi/js": "^7.4.47",
@@ -9,7 +9,7 @@
     "json5": "^2.2.3",
     "lodash-es": "^4.18.1",
     "showdown": "^2.1.0",
-    "w-aggrid-vue": "^2.0.60",
+    "w-aggrid-vue": "^2.0.61",
     "w-component-vue": "^2.4.76",
     "w-data-collector": "^1.0.24",
     "w-serv-hapi": "^1.0.75",
@@ -29,7 +29,7 @@
     "eslint-plugin-n": "^16.6.2",
     "eslint-plugin-promise": "^6.1.1",
     "eslint-plugin-vue": "^9.10.0",
-    "vue": "^2.6.14",
+    "vue": "^2.7.16",
     "vuex": "^3.6.2",
     "w-orm-lmdb": "^1.0.9",
     "w-package-tools": "^1.1.12",
