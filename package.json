@@ -1,6 +1,6 @@
 {
   "name": "w-web-task",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "@mdi/js": "^7.4.47",
@@ -13,7 +13,7 @@
     "w-data-collector": "^1.0.26",
     "w-serv-hapi": "^1.0.77",
     "w-serv-orm": "^1.0.43",
-    "w-syslog": "^1.0.14",
+    "w-syslog": "^1.0.15",
     "w-ui-loginout": "^1.0.14",
     "wsemi": "^1.8.70"
   },
