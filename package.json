@@ -1,6 +1,6 @@
 {
   "name": "w-web-task",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "@mdi/js": "^7.4.47",
@@ -8,8 +8,8 @@
     "dompurify": "^3.4.12",
     "json5": "^2.2.3",
     "showdown": "^2.1.0",
-    "w-aggrid-vue": "^2.0.70",
-    "w-component-vue": "^2.4.85",
+    "w-aggrid-vue": "^2.0.71",
+    "w-component-vue": "^2.4.86",
     "w-data-collector": "^1.0.30",
     "w-serv-hapi": "^1.0.80",
     "w-serv-orm": "^1.0.47",
