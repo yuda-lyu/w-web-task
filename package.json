@@ -1,14 +1,14 @@
 {
   "name": "w-web-task",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "axios": "^1.18.1",
     "dompurify": "^3.4.12",
     "json5": "^2.2.3",
     "showdown": "^2.1.0",
-    "w-aggrid-vue": "^2.0.73",
-    "w-component-vue": "^2.5.2",
+    "w-aggrid-vue": "^2.0.74",
+    "w-component-vue": "^2.5.3",
     "w-data-collector": "^1.0.32",
     "w-serv-hapi": "^1.0.82",
     "w-serv-orm": "^1.0.49",
