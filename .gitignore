@@ -1,10 +1,9 @@
 node_modules
 .agents
-AGENTS.md
+AGENTS*.md
 .opencode
 .claude
-CLAUDE.md
-CLAUDE_settings.md
+CLAUDE*.md
 .env
 zAI.md
 
@@ -17,3 +16,4 @@ user_data
 dist
 
 tmp
+

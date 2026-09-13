@@ -1,8 +1,7 @@
 node_modules
 .opencode
 .claude
-CLAUDE.md
-CLAUDE_settings.md
+CLAUDE*.md
 .env
 
 _logs
@@ -15,3 +14,5 @@ tmp
 
 test
 spec
+.agents
+AGENTS*.md

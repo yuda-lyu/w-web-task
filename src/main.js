@@ -40,7 +40,7 @@ Vue.directive('domdragdrop', domDragDrop())
 
 //WServHapiClient
 WServHapiClient({
-    showLog: false,
+    useShowLog: false,
     url: window.location.origin + window.location.pathname,
     useWaitToken: true,
     apiName: 'api',

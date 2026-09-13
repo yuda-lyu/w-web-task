@@ -1,20 +1,20 @@
 {
   "name": "w-web-task",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "axios": "^1.18.1",
     "dompurify": "^3.4.12",
     "json5": "^2.2.3",
     "showdown": "^2.1.0",
-    "w-aggrid-vue": "^2.0.85",
-    "w-component-vue": "^2.5.12",
-    "w-data-collector": "^1.0.36",
-    "w-serv-hapi": "^1.0.86",
-    "w-serv-orm": "^1.0.53",
-    "w-syslog": "^1.0.25",
-    "w-ui-loginout": "^1.0.24",
-    "wsemi": "^1.8.85"
+    "w-aggrid-vue": "^2.0.86",
+    "w-component-vue": "^2.5.13",
+    "w-data-collector": "^1.0.37",
+    "w-serv-hapi": "^1.0.88",
+    "w-serv-orm": "^1.0.54",
+    "w-syslog": "^1.0.26",
+    "w-ui-loginout": "^1.0.25",
+    "wsemi": "^1.8.92"
   },
   "devDependencies": {
     "@vue/cli-plugin-babel": "^5.0.8",
@@ -29,10 +29,10 @@
     "eslint-plugin-vue": "^9.10.0",
     "vue": "^2.7.16",
     "vuex": "^3.6.2",
-    "w-orm-lmdb": "^1.0.30",
-    "w-package-tools": "^1.1.15",
+    "w-orm-lmdb": "^1.0.31",
+    "w-package-tools": "^1.1.16",
     "w-package-tools-e2e": "^1.0.0",
-    "w-screenctl": "^1.0.18"
+    "w-screenctl": "^1.0.19"
   },
   "scripts": {
     "serve": "vue-cli-service serve",
@@ -40,7 +40,7 @@
     "test:unit": "mocha test/unit-*.test.mjs --reporter list --timeout 60000",
     "test:api": "mocha test/api-*.test.mjs --reporter list --timeout 300000",
     "test:e2e": "mocha test/e2e-*.test.mjs --reporter list --timeout 300000",
-    "test": "npm run test:unit && npm run test:api && npm run test:e2e",
+    "test": "mocha --no-parallel \"test/*.test.mjs\" --timeout 180000",
     "lint": "vue-cli-service lint",
     "deploy": "gh-pages -d docs"
   },
