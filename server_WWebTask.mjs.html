@@ -3,7 +3,7 @@
 <head>
     
     <meta charset="utf-8">
-    <title>WWebTask.mjs - Documentation</title>
+    <title>server/WWebTask.mjs - Documentation</title>
     
     
     <script src="scripts/prettify/prettify.js"></script>
@@ -29,13 +29,13 @@
 <nav >
     
     
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
     
 </nav>
 
 <div id="main">
     
-    <h1 class="page-title">WWebTask.mjs</h1>
+    <h1 class="page-title">server/WWebTask.mjs</h1>
     
 
     
@@ -63,6 +63,7 @@ import strright from 'wsemi/src/strright.mjs'
 import strdelright from 'wsemi/src/strdelright.mjs'
 import pm2resolve from 'wsemi/src/pm2resolve.mjs'
 import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
+import cacheSt from 'wsemi/src/cacheSt.mjs'
 import fsIsFolder from 'wsemi/src/fsIsFolder.mjs'
 import fsIsFile from 'wsemi/src/fsIsFile.mjs'
 import replace from 'wsemi/src/replace.mjs'
@@ -70,7 +71,10 @@ import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
 import procLang from './procLang.mjs'
 import procCore from './procCore.mjs'
+import createLockSave from './lockSave.mjs'
 import srLogInit from './srLog.mjs'
+import { maskTok, maskQuery } from './maskLog.mjs'
+import { wrapInjected } from './wrapInjected.mjs'
 import ds from '../src/schema/index.mjs'
 
 
@@ -196,6 +200,27 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let kpLang = procLang({ kpLangExt, webName, webDescription })
 
 
+    //srLog（後端 log；錯誤一律 log err-key 供識別）。須先於 WServOrm 建構：getUserById 於建構時即交給 WServOrm，其包裝要用 srLog
+    let srLog = srLogInit(opt)
+
+    //注入函數一律經 wrapInjected 包裝後使用（W 契約，spec/設計要點與取捨.md D15）：
+    //部署方注入之 getUserByToken / verifyClientUser / verifyAppUser / getUserById 同步拋錯或 reject 時，視同否定結果（查無 → null、無權限 → false），
+    //走各呼叫點既有分支回自家 key；失敗原文（舊版 sso helper 為已代入權杖之完整網址）不上拋、不入 log，只記 describeUpstream 之 key 或型別。
+    //以包裝版取代參數本身 → 其後所有呼叫點（含日後新增者）結構上只可能用到包裝版；包裝處記 warn（因），呼叫點記 error（果）。
+    //getUserById 選填（useCheckUser=true 時由 WServOrm 呼叫；原 reject 原文經 execute 之 pm2resolve 回前端），有給才包裝，查無由 WServOrm 既有分支拒絕。
+    let onInjectFail = (name) => {
+        return (d) => {
+            srLog.warn({ event: `inject-${name}-fail`, ...d })
+        }
+    }
+    getUserByToken = wrapInjected(getUserByToken, { failValue: null, onFail: onInjectFail('getUserByToken') })
+    verifyClientUser = wrapInjected(verifyClientUser, { failValue: false, onFail: onInjectFail('verifyClientUser') })
+    verifyAppUser = wrapInjected(verifyAppUser, { failValue: false, onFail: onInjectFail('verifyAppUser') })
+    if (isfun(getUserById)) {
+        getUserById = wrapInjected(getUserById, { failValue: null, onFail: onInjectFail('getUserById') })
+    }
+
+
     //WServOrm
     let optWServOrm = {
         useCheckUser,
@@ -214,11 +239,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let { woItems, procOrm } = wp
 
 
-    //srLog（後端 log；錯誤一律 log err-key 供識別）
-    let srLog = srLogInit(opt)
-
-    //maskTok：debug console.log 不印完整 token/authorization（憑證），僅前 4 碼 + ***
-    let maskTok = (t) => isestr(t) ? (strleft(t, 4) + '***') : t
+    //印權杖（console）一律經 maskLog 之 maskTok / maskQuery（M 契約，含陣列與非字串），不另寫第二份遮罩
 
     //runApi: 統一 HTTP handler 收尾 — pm2resolve + isErr 還原 + 失敗記 srLog.error (與 kpFunExt 之 wrapErrLog 對稱)
     let runApi = async (event, core) => {
@@ -254,8 +275,14 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let kmx = pmKeyMutex()
 
 
+    //lockSave: 有副作用之寫入路徑之雙擊防護(後端, 見 lockSave.mjs, spec D16): 同一操作者之同一操作(或同一列)處理中再送出即 reject, 不排隊.
+    //cacheSt 內含 TTL 偵測 timer(setInterval) → 建於此並注入 procCore, 不於 procCore 內建立: procCore 保持無 timer, unit 測試可獨立建構退出(同 D12 封存 timer 之安排)
+    let cst = cacheSt()
+    let lockSave = createLockSave(cst)
+
+
     //procCore
-    let pc = procCore({ woItems, procOrm, ds, srLog, kmx })
+    let pc = procCore({ woItems, procOrm, ds, srLog, kmx, lockSave })
     let { saveFile, getFileInfo, readFile, getStats } = pc
 
 
@@ -335,21 +362,31 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     }
 
 
-    //getTokenUser
+    //getTokenUser：token → 使用者之唯一出口（client 路徑、app 路徑、連線閘 p.checkToken 共用）。
+    //查無（含上游失敗經 wrapInjected 視同查無）一律 errUserNotFound（S7；與 perm getTokenUser 一致），欄位不齊再由 checkUser 回對應 key。
     let getTokenUser = async (token) => {
 
-        //getUserByToken
-        let userSelf = getUserByToken(token)
-        if (ispm(userSelf)) {
-            userSelf = await userSelf
+        //user
+        let user = null
+        if (isestr(token)) {
+            user = getUserByToken(token)
+            if (ispm(user)) {
+                user = await user
+            }
         }
 
         //check
-        if (true) {
-            await checkUser(userSelf)
+        if (!iseobj(user)) {
+            console.log(`token`, maskTok(token))
+            console.log(`can not find the user from token`)
+            return Promise.reject('errUserNotFound')
         }
 
-        return userSelf
+        //checkUser: client 與 app 路徑對稱 (id/email/name/isAdmin 缺一即拒).
+        //agent 建議以 SSO app token (isApp='y') 認證, 其解析之虛擬使用者四欄皆為非空占位值, 不受本檢查影響.
+        await checkUser(user)
+
+        return user
     }
 
 
@@ -357,11 +394,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let p = {
         checkToken: async(token) => {
 
-            //getUserByToken
-            let u = await getUserByToken(token)
-
-            //checkUser
-            await checkUser(u)
+            //getTokenUser：與 HTTP 路徑同一規則（S8），不另寫第二份
+            await getTokenUser(token)
 
             return true
         },
@@ -395,25 +429,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     //getAndVerifyAppUser
     let getAndVerifyAppUser = async (token, from = '') => {
 
-        //user
-        let user = null
-        if (isestr(token)) {
-            user = getUserByToken(token)
-            if (ispm(user)) {
-                user = await user
-            }
-        }
-
-        //check
-        if (!iseobj(user)) {
-            console.log(`token`, maskTok(token))
-            console.log(`can not find the user from token`)
-            return Promise.reject('errUserNotFound')
-        }
-
-        //checkUser: 與 client 路徑對稱 (id/email/name/isAdmin 缺一即拒).
-        //agent 建議以 SSO app token (isApp='y') 認證, 其解析之虛擬使用者四欄皆為非空占位值, 不受本檢查影響.
-        await checkUser(user)
+        //getTokenUser：查無 → errUserNotFound、欄位不齊 → checkUser 之 key（與 client 路徑同一出口）
+        let user = await getTokenUser(token)
 
         //verifyAppUser
         let b = verifyAppUser(user, from)
@@ -446,7 +463,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
         //check
         if (!iseobj(payload)) {
-            console.log('payload', payload)
+            console.log('payload', maskTok(payload)) //本體可夾 token（POST payload.token）, 無效本體（陣列/字串等）不原樣印出
             console.log(`invalid payload in req`)
             return Promise.reject('errPayloadInvalid')
         }
@@ -504,7 +521,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
                     //check
                     if (!isestr(token)) {
-                        console.log('req.query', get(req, 'query'))
+                        console.log('req.query', maskQuery(get(req, 'query'))) //重複 ?token= 時 token 為陣列, 整包 query 須經遮罩
                         console.log('token', maskTok(token))
                         console.log('[API]getUserByToken/check token: invalid token')
                         return Promise.reject('errTokenNoPermission')
@@ -969,6 +986,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                         .header('X-Content-Type-Options', 'nosniff')
                 }
                 catch (err) {
+                    //上游（注入函數）失敗已由 wrapInjected 轉為否定結果 → 此處收到之字串皆為自家 key（errUserNotFound / errUserNoPermission / checkUser 與 procCore 之 key）
                     let key = isestr(err) ? err : get(err, 'message', 'errFileNotFound')
                     srLog.error({ event: 'api/getFile', err: key })
                     return res.response(JSON.stringify({ state: 'error', msg: key })).code(404).type('application/json')
@@ -1007,6 +1025,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                 console.log('apiType', apiType)
                 console.log('authorization', maskTok(authorization))
                 console.log('invalid token')
+                srLog.error({ event: 'verifyConn', err: 'errTokenNoPermission', apiType }) //認證失敗須入 log 供稽核/統計（CLAUDE.md「log 記錄要點」；同 w-web-api）；只記 key，不記 authorization 原值
                 return false
             }
 
@@ -1017,11 +1036,19 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
             return b
         },
         getUserIdByToken: async (token) => { //可使用async或sync函數
-            if (!isestr(token)) {
-                return ''
+            //fail-closed（S9，對齊 perm）：token 非字串或查無 userId（含上游失敗經 wrapInjected 視同查無）一律 reject，
+            //不以 '' 放行 execute 執行函數（修正前回 '' 並繼續執行 = fail-open）
+            let user = null
+            if (isestr(token)) {
+                user = await getUserByToken(token)
             }
-            let user = await getUserByToken(token)
             let userId = get(user, 'id', '')
+            if (!isestr(userId)) {
+                console.log('token', maskTok(token))
+                console.log('can not get the userId from token')
+                srLog.error({ event: 'getUserIdByToken', err: 'errUserIdMissing' })
+                return Promise.reject('errUserIdMissing')
+            }
             return userId
         },
         useDbOrm: true,
@@ -1059,7 +1086,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
             getStats: wrapErrLog('getStats', (userId) => pc.getStats(userId)),
 
         },
-        fnTableTags: 'tableTags-web-task.json',
+        fpTableTags: 'tableTags-web-task.json', //w-serv-hapi 之新鍵名(舊名 fnTableTags 僅靠相容層生效)
     })
 
 
@@ -1082,7 +1109,7 @@ export default WWebTask
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Tue Sep 22 2026 22:52:16 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Fri Oct 02 2026 21:06:48 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>
