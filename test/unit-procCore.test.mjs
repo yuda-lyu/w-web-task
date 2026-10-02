@@ -1,8 +1,11 @@
 //unit-procCore：procCore 工廠之業務邏輯單元測試（不需 server/browser）。
-//mock woItems（in-memory Map）+ srLog + kmx，讓 procCore 在純記憶體環境執行。
-//對應 spec 設計總覽 §5（任務狀態機）與 §6（API 目錄）。
+//mock woItems（in-memory Map）+ srLog + kmx + lockSave，讓 procCore 在純記憶體環境執行。
+//對應 spec 設計總覽 §5（任務狀態機）與 §6（API 目錄）; 「雙擊防護 / 並行 (D16)」對應 spec/設計要點與取捨.md D16。
 import assert from 'assert'
+import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
+import cacheSt from 'wsemi/src/cacheSt.mjs'
 import procCore from '../server/procCore.mjs'
+import createLockSave from '../server/lockSave.mjs'
 import ds from '../src/schema/index.mjs'
 
 
@@ -51,6 +54,35 @@ function makeTable() {
     }
 }
 
+//makeSlowTable：同 makeTable，但 select / insert / save / del 先讓出 ms 毫秒再執行 —— 使並行呼叫之「先 select 後 insert」競態窗必定重疊
+//（未以 kmx 包成原子者即重複建列）。供「雙擊防護 / 並行 (D16)」用；其餘案例仍用即時之 makeTable。
+function makeSlowTable(ms = 5) {
+    const t = makeTable()
+    const wait = () => new Promise((resolve) => setTimeout(resolve, ms))
+    return {
+        async select(q) {
+            await wait()
+            return t.select(q)
+        },
+        async insert(rows) {
+            await wait()
+            return t.insert(rows)
+        },
+        async save(rows) {
+            await wait()
+            return t.save(rows)
+        },
+        async del(q) {
+            await wait()
+            return t.del(q)
+        },
+        async delAll() {
+            return t.delAll()
+        },
+        _map: t._map,
+    }
+}
+
 //woItems mock
 const woItems = {
     channels: makeTable(),
@@ -64,11 +96,16 @@ const woItems = {
 //srLog mock（靜默，不寫檔）
 const srLog = { info() {}, warn() {}, error() {} }
 
-//kmx mock：直接執行 fn，不做序列化（unit 不測並發）。對應 WWebTask.mjs 中 pmKeyMutex() 的用途。
+//kmx mock：直接執行 fn，不做序列化（以下既有案例皆依序呼叫, 不測並發; 並發見「雙擊防護 / 並行 (D16)」, 另建真 pmKeyMutex 之實體）。對應 WWebTask.mjs 中 pmKeyMutex() 的用途。
 const kmx = (key, fn) => fn()
 
+//lockSave：真實雙擊防護（server/lockSave.mjs, D16; 同 WWebTask.mjs 之建立方式）。既有案例皆依序呼叫, 占位於每次完成即釋放, 不受影響。
+//cacheSt 含 TTL 偵測 timer（setInterval）, 於本檔根 describe 之 after 以 clear() 停止, 否則 mocha 不結束。
+const cst = cacheSt()
+const lockSave = createLockSave(cst)
+
 //procCore 實體
-const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx })
+const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx, lockSave })
 
 
 // ── 工具函式 ─────────────────────────────────────────────────────────────────
@@ -115,6 +152,10 @@ async function seedDemoChannel() {
 // ── 測試套件 ──────────────────────────────────────────────────────────────────
 describe('unit-procCore', function() {
     this.timeout(10000)
+
+    after(function() {
+        cst.clear() //停止 cacheSt 之 TTL 偵測 timer
+    })
 
     // ── postMessage ────────────────────────────────────────────────────────────
     describe('postMessage', function() {
@@ -638,6 +679,162 @@ describe('unit-procCore', function() {
 
             await expectReject(() => pc.getArchivedTasks(USER_HUMAN, null), 'errChannelIdInvalid')
             await expectReject(() => pc.getArchivedMessages(USER_HUMAN, null), 'errChannelIdInvalid')
+        })
+
+    })
+
+    // ── 雙擊防護 / 並行 (D16) ───────────────────────────────────────────────────
+    //另建 procCore 實體: 真 kmx（wsemi pmKeyMutex, 同 WWebTask）+ 真 lockSave（cacheSt）+ 慢速表（makeSlowTable）。
+    //並行之兩次呼叫於同一同步區段發起: lockSave 之占位於呼叫當下同步取得, 故「同一操作者同一列 / 同一頻道」之第 2 次必得占位衝突;
+    //kmx 包成原子之「先 select 後 insert」於慢速表下若未序列化必重複建列 —— 兩者結果皆與時序無關。
+    describe('雙擊防護 / 並行 (D16)', function() {
+
+        const USER_B = 'id-for-human-b'
+        const CH = 'id-for-channel-dc'
+
+        let wo = null
+        let cstC = null
+        let pcC = null
+
+        beforeEach(async function() {
+            wo = {
+                channels: makeSlowTable(),
+                channelMembers: makeSlowTable(),
+                messages: makeSlowTable(),
+                messagesArchive: makeSlowTable(),
+                tasks: makeSlowTable(),
+                tasksArchive: makeSlowTable(),
+            }
+            cstC = cacheSt()
+            pcC = procCore({ woItems: wo, procOrm: null, ds, srLog, kmx: pmKeyMutex(), lockSave: createLockSave(cstC) })
+            //既有頻道 CH（無主責 agent）
+            const ch = ds.channels.funNew({ name: 'DC Channel', ownerId: USER_HUMAN, userId: USER_HUMAN })
+            ch.id = CH
+            await wo.channels.insert(ch)
+        })
+
+        afterEach(function() {
+            cstC.clear() //停止 cacheSt 之 TTL 偵測 timer
+        })
+
+        //settle: 並行呼叫之結果 → [{ ok, v }]; 拒絕者之 v 為 reject 之 key
+        async function settle(pms) {
+            const rs = await Promise.allSettled(pms)
+            return rs.map((r) => (r.status === 'fulfilled' ? { ok: true, v: r.value } : { ok: false, v: r.reason }))
+        }
+
+        //oneOkOneReject: 恰 1 成功, 且唯一之拒絕為指定 key（第 1 個發起者持有占位, 第 2 個被拒）
+        function oneOkOneReject(rs, key) {
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, false], `應為第 1 次成功、第 2 次被拒, 實得 ${JSON.stringify(rs)}`)
+            assert.strictEqual(rs[1].v, key, `第 2 次應 reject「${key}」, 實得「${rs[1].v}」`)
+        }
+
+        it('saveChannel: 同一操作者並行儲存同一新列(同 name) → 第 2 次 reject saveInProgress, 只建 1 列', async function() {
+            //對應 D16 後端: saveChannel 以 lockSave('saveChannel', `${userId}:${row.id || row.name}`) 擋同一操作者同一列之連發(不排隊)
+            const row = { name: 'dc-new', levels: '', description: '', agentId: '', ownerId: USER_HUMAN }
+            const rs = await settle([pcC.saveChannel(USER_HUMAN, { ...row }), pcC.saveChannel(USER_HUMAN, { ...row })])
+            oneOkOneReject(rs, 'saveInProgress')
+            const chs = await wo.channels.select({ name: 'dc-new' })
+            assert.strictEqual(chs.length, 1, `同名新頻道應只 1 列, 實得 ${chs.length}`)
+        })
+
+        it('saveChannel: 同一操作者並行儲存同一既有列(同 id) → 第 2 次 reject saveInProgress, 內容為第 1 次所寫', async function() {
+            //對應 D16 後端: 既有列以 id 為列識別; 第 2 次不排隊(排隊後再寫一次即覆寫)
+            const rs = await settle([
+                pcC.saveChannel(USER_HUMAN, { id: CH, description: 'desc-1' }),
+                pcC.saveChannel(USER_HUMAN, { id: CH, description: 'desc-2' }),
+            ])
+            oneOkOneReject(rs, 'saveInProgress')
+            const chs = await wo.channels.select({ id: CH })
+            assert.strictEqual(chs[0].description, 'desc-1', '頻道內容應為第 1 次之寫入')
+        })
+
+        it('saveChannel: 同一操作者並行儲存不同新列 → 皆成功(只擋同一列, 同批其他列不受影響)', async function() {
+            //對應 D16 後端: lockSave 之 operatorId 含列識別
+            const rs = await settle([
+                pcC.saveChannel(USER_HUMAN, { name: 'dc-a' }),
+                pcC.saveChannel(USER_HUMAN, { name: 'dc-b' }),
+            ])
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, true], `兩列皆應成功, 實得 ${JSON.stringify(rs)}`)
+            assert.strictEqual((await wo.channels.select({ name: 'dc-a' })).length, 1)
+            assert.strictEqual((await wo.channels.select({ name: 'dc-b' })).length, 1)
+        })
+
+        it('saveChannel: 不同操作者並行對同一頻道設同一 agentId → 皆成功, 主責 agent 成員列只 1 列', async function() {
+            //對應 D7「saveChannel 設 agentId 時確保 agent member 列」+ D16: 先 select 後 insert 以 kmx 包成原子
+            const rs = await settle([
+                pcC.saveChannel(USER_HUMAN, { id: CH, agentId: 'agent-dc' }),
+                pcC.saveChannel(USER_B, { id: CH, agentId: 'agent-dc' }),
+            ])
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, true], `不同操作者不互擋, 實得 ${JSON.stringify(rs)}`)
+            const ms = await wo.channelMembers.select({ channelId: CH, memberId: 'agent-dc' })
+            assert.strictEqual(ms.length, 1, `主責 agent 成員列應只 1 列, 實得 ${ms.length}`)
+            assert.strictEqual(ms[0].memberType, 'agent')
+        })
+
+        it('saveChannel 設 agentId 與該 agent 之 ackChannel 並行 → 成員列只 1 列且游標保留(兩路徑共用同一 kmx key)', async function() {
+            //對應 D7「saveChannel 確保 agent member 列; ackChannel 對缺列者 upsert」同一 (channelId, memberId) 列 + D16
+            const rs = await settle([
+                pcC.saveChannel(USER_HUMAN, { id: CH, agentId: 'agent-dc' }),
+                pcC.ackChannel('agent-dc', CH, 'msg-dc-1'),
+            ])
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, true], `兩者皆應成功, 實得 ${JSON.stringify(rs)}`)
+            const ms = await wo.channelMembers.select({ channelId: CH, memberId: 'agent-dc' })
+            assert.strictEqual(ms.length, 1, `成員列應只 1 列, 實得 ${ms.length}`)
+            assert.strictEqual(ms[0].lastSeenMessageId, 'msg-dc-1', '游標應為 ack 之值(不因另一路徑而遺失)')
+        })
+
+        it('ackChannel: 同一呼叫者並行 ack 同頻道(缺列) → 皆成功, 成員列只 1 列', async function() {
+            //對應 D7 ackChannel 對缺列者 upsert + D16: 先 select 後 save / insert 以 kmx 包成原子(ack 非按鈕, 不加 lockSave 故不拒絕)
+            const rs = await settle([
+                pcC.ackChannel('agent-dc2', CH, 'msg-a'),
+                pcC.ackChannel('agent-dc2', CH, 'msg-b'),
+            ])
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, true], `兩次 ack 皆應成功, 實得 ${JSON.stringify(rs)}`)
+            const ms = await wo.channelMembers.select({ channelId: CH, memberId: 'agent-dc2' })
+            assert.strictEqual(ms.length, 1, `游標成員列應只 1 列, 實得 ${ms.length}`)
+            assert.ok(['msg-a', 'msg-b'].includes(ms[0].lastSeenMessageId), `游標應為兩次 ack 之一, 實得 ${ms[0].lastSeenMessageId}`)
+        })
+
+        it('saveChannelMember: 同一操作者並行儲存同一新列 → 第 2 次 reject saveInProgress, 只建 1 列', async function() {
+            //對應 D16 後端: saveChannelMember 以 lockSave('saveChannelMember', `${userId}:${row.id || (channelId:memberId)}`)
+            const row = { channelId: CH, memberId: 'member-dc', memberType: 'human', role: 'member' }
+            const rs = await settle([pcC.saveChannelMember(USER_HUMAN, { ...row }), pcC.saveChannelMember(USER_HUMAN, { ...row })])
+            oneOkOneReject(rs, 'saveInProgress')
+            const ms = await wo.channelMembers.select({ channelId: CH, memberId: 'member-dc' })
+            assert.strictEqual(ms.length, 1, `新成員應只 1 列, 實得 ${ms.length}`)
+        })
+
+        it('deleteChannel / deleteChannelMember: 同一操作者並行刪除同一列 → 第 2 次 reject deleteInProgress, 列已刪除', async function() {
+            //對應 D16 後端: 刪除以 lockSave(op, `${userId}:${id}`, …, { errKey: 'deleteInProgress' }) 擋同一列之連發
+            const rs1 = await settle([pcC.deleteChannel(USER_HUMAN, CH), pcC.deleteChannel(USER_HUMAN, CH)])
+            oneOkOneReject(rs1, 'deleteInProgress')
+            assert.strictEqual((await wo.channels.select({ id: CH })).length, 0, '頻道應已刪除')
+
+            const m = ds.channelMembers.funNew({ channelId: CH, memberId: 'member-del', userId: USER_HUMAN })
+            await wo.channelMembers.insert(m)
+            const rs2 = await settle([pcC.deleteChannelMember(USER_HUMAN, m.id), pcC.deleteChannelMember(USER_HUMAN, m.id)])
+            oneOkOneReject(rs2, 'deleteInProgress')
+            assert.strictEqual((await wo.channelMembers.select({ id: m.id })).length, 0, '成員列應已刪除')
+        })
+
+        it('postMessage: 同一操作者並行送出同頻道 → 第 2 次 reject sendInProgress, 只 1 則訊息', async function() {
+            //對應 D16 後端: postMessage 以 lockSave('postMessage', `${userId}:${channelId}`, …, { errKey: 'sendInProgress' }) 包在 kmx 外層
+            const rs = await settle([pcC.postMessage(USER_HUMAN, CH, 'dc-1'), pcC.postMessage(USER_HUMAN, CH, 'dc-2')])
+            oneOkOneReject(rs, 'sendInProgress')
+            const msgs = await wo.messages.select({ channelId: CH })
+            assert.deepStrictEqual(msgs.map((x) => x.content), ['dc-1'], '只應有第 1 次之訊息')
+        })
+
+        it('postMessage: 不同操作者並行送出同頻道皆成功; 同一操作者依序再送同樣內容亦成功(新訊息不擋)', async function() {
+            //對應 D16 後端: 不同操作者不互擋(kmx 仍序列化同頻道發訊); 依序再送為使用者之新訊息
+            const rs = await settle([pcC.postMessage(USER_HUMAN, CH, 'h-1'), pcC.postMessage(USER_B, CH, 'b-1')])
+            assert.deepStrictEqual(rs.map((r) => r.ok), [true, true], `不同操作者皆應成功, 實得 ${JSON.stringify(rs)}`)
+            await pcC.postMessage(USER_HUMAN, CH, 'h-2')
+            await pcC.postMessage(USER_HUMAN, CH, 'h-2')
+            const msgs = await wo.messages.select({ channelId: CH })
+            assert.strictEqual(msgs.length, 4, `應共 4 則訊息, 實得 ${msgs.length}`)
+            assert.strictEqual(msgs.filter((x) => x.content === 'h-2').length, 2, '依序再送之同樣內容應各成 1 則')
         })
 
     })

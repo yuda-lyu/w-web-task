@@ -1,0 +1,20 @@
+{
+    // e2e／api 測試實例專用 app 設定（JSON5）：由 test/tools/e2e-setup.mjs 之 harness 載入；與 ./settings.json 之差異有二：
+    // 1) archiveAfterDays 設 0 停用封存掃描。why: demo 種子時間戳為固定值 2026-01-01（baseline 確定性所需, 見 g.initialData.mjs 註解）,
+    //    距今必逾封存齡 → 若封存掃描啟用, backend 起動 30s 後種子即被搬冷表, e2e/baseline 失去確定性。
+    //    封存邏輯本身由 unit-procCore(archiveSweep) 與 api-agent(G1) 覆蓋。
+    // 2) serverPort 為測試實例專用之 11108（3 srv 之後端為 11008），使測試可與 3 srv 並存、互不干擾；
+    //    harness 以本檔之 serverPort 為測試後端 port，並以 WTASK_DEV_PROXY_TARGET 使前端 dev server 之 /api 指向此 port。
+    // logFd 相對於測試實例之工作目錄（test/_tmp/e2e-harness/root）。
+
+    showLanguage: 'y',
+    language: 'eng',
+    serverPort: 11108,
+
+    logFd: './logs',
+    logInterval: 'hr',
+
+    // 停用封存掃描（e2e 確定性）
+    archiveAfterDays: 0,
+
+}

@@ -302,6 +302,20 @@ let kpLang = {
         cht: '已讀訊息主鍵無效',
     },
 
+    //雙擊防護 (同一操作者之同一操作處理中再送出; 見 lockSave, spec D16)
+    saveInProgress: { //頻道 / 成員之儲存: 同一操作者對同一列處理中再送出
+        eng: 'The previous save is still in progress. Please do not submit again.',
+        cht: '上一次儲存仍在處理中，請勿重複送出',
+    },
+    deleteInProgress: { //頻道 / 成員之刪除: 同一操作者對同一列處理中再送出
+        eng: 'The previous deletion is still in progress. Please do not submit again.',
+        cht: '上一次刪除仍在處理中，請勿重複送出',
+    },
+    sendInProgress: { //發送訊息: 同一操作者對同一頻道送出中再送出
+        eng: 'The previous message is still being sent. Please do not submit again.',
+        cht: '上一則訊息仍在送出中，請勿重複送出',
+    },
+
     //=== UI 文字鍵 (前端頁面用) ===
 
     //頻道頁

@@ -72,6 +72,16 @@ let getUserByToken = async (token) => {
     if (['agent-api', 'agent-sso', 'agent-perm', 'agent-task'].includes(token) && process.env.NODE_ENV !== 'production') {
         return { id: token, name: `Agent ${token.slice(6)}`, email: `${token}@example.com`, isAdmin: 'y' }
     }
+    //'{token-for-reject}' 為測試用權杖 (test/api-tokenLeak), 同樣受 NODE_ENV 守門: 模擬舊版 w-web-sso helper 失敗時之 reject 形狀
+    //(以字串 reject「已代入權杖之完整網址」, 內夾合成秘密), 供驗證注入函數失敗時回應 / srLog / console 皆不外洩上游原文 (spec D15).
+    if (token === '{token-for-reject}' && process.env.NODE_ENV !== 'production') {
+        return Promise.reject(`can not get user data by url[http://127.0.0.1:11007/api/getSsoUserInfor?token=SYNTH-SYS-SECRET-FOR-TEST&key=token&value=${token}]`)
+    }
+    //'{token-for-verify-throw}' 為測試用權杖 (test/api-tokenLeak), 同樣受 NODE_ENV 守門: 解析為合成使用者 id-for-verify-throw,
+    //其 verifyClientUser / verifyAppUser 會拋出夾合成秘密之 Error, 供驗證 verify 系注入函數拋錯時視同無權限且不外洩原文 (spec D15).
+    if (token === '{token-for-verify-throw}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-verify-throw', name: 'verify-throw', email: 'verify-throw@example.com', isAdmin: 'y' }
+    }
     //未設定 SSO app token 時(本機開發未接SSO), 不打SSO直接拒絕
     if (!ssoAppToken) {
         console.log('ssoAppToken 未設定, 略過 SSO 驗證')
@@ -90,7 +100,9 @@ let getUserByToken = async (token) => {
         return { id: u.id, name: u.name, email: u.email, isAdmin: u.isAdmin }
     }
     catch (err) {
-        console.log('SSO getSsoUserInfor error', err.message)
+        //不印 err.message: 請求例外之 message 可能含已代入 ssoAppToken 與使用者權杖之完整網址, 只印錯誤名稱與底層代碼 (spec D15);
+        //axios 對非 2xx 亦拋錯 (無 cause), 另印 HTTP 狀態碼以保留診斷 (數值, 不含權杖)
+        console.log('SSO getSsoUserInfor error', get(err, 'name', ''), get(err, 'cause.code', ''), get(err, 'response.status', ''))
         return {}
     }
 }
@@ -98,6 +110,10 @@ let getUserByToken = async (token) => {
 let verifyClientUser = (user, from) => {
     console.log('verifyClientUser/user', user)
     console.log('於生產環境時得加入限制瀏覽器使用者身份機制')
+    //測試用 (受 NODE_ENV 守門): 合成使用者 id-for-verify-throw (見 getUserByToken 之 '{token-for-verify-throw}') 一律拋出夾合成秘密之 Error
+    if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
+        throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
+    }
     // return false //測試無法登入
     return user.isAdmin === 'y' //測試僅系統管理者使用
 }
@@ -105,6 +121,10 @@ let verifyClientUser = (user, from) => {
 let verifyAppUser = (user, from) => {
     console.log('verifyAppUser/user', user)
     console.log('於生產環境時得加入限制應用程式使用者身份機制')
+    //測試用 (受 NODE_ENV 守門): 合成使用者 id-for-verify-throw (見 getUserByToken 之 '{token-for-verify-throw}') 一律拋出夾合成秘密之 Error
+    if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
+        throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
+    }
     // return false //測試無法登入
     return user.isAdmin === 'y' //測試僅系統管理者使用
 }

@@ -114,9 +114,10 @@
         </div>
 
         <!-- 詳情面板 -->
+        <!-- box-sizing:border-box: detailHeight 為清單以外之剩餘高, 須含 padding 與 border-top, 否則實高多 25px 而底部被裁(內部捲動區最末 25px 永遠看不到) -->
         <div
             data-fmid="task-detail"
-            :style="`height:${detailHeight}px; overflow-y:auto; border-top:1px solid #ddd; background:#fff; padding:12px 18px;`"
+            :style="`height:${detailHeight}px; box-sizing:border-box; overflow-y:auto; border-top:1px solid #ddd; background:#fff; padding:12px 18px;`"
             v-if="taskDetail"
         >
 
@@ -590,19 +591,32 @@ export default {
 
         onClickRetryBtn: function(msg) {
             // console.log('methods onClickRetryBtn')
+            //promiseUnlock 之鎖交由 retryTask 之 runSubmit 管理, 不於此解鎖 (D16; 原第一行即 pm.resolve, 焦點留在重試鈕時鍵盤可重複開確認框)
+            let vo = this
+            vo.retryTask({ pm: msg.pm })
+        },
+
+        retryTask: function(opt = {}) {
+            // console.log('methods retryTask')
 
             let vo = this
 
-            //第一行立刻釋放按鈕視覺鎖
-            msg.pm.resolve()
-
-            //確認後執行
+            //taskId: 以觸發當下選取之任務為準
             let taskId = vo.taskIdSelected
-            vo.$dg.showCheckYesNo(vo.$t('resetTaskConfirm'))
-                .then(() => {
-                    vo.doResetTask(taskId)
-                })
-                .catch(() => {})
+
+            //runSubmit: 重試流程(確認框至結果訊息框關閉)進行中再觸發即略過, 重試鈕之滑鼠與鍵盤 Enter 同一狀態 (D16);
+            //unlockBtn 於開確認框前釋放按鈕鎖(確認框背後之按鈕不顯示載入圖示), 重入仍由流程狀態擋
+            return vo.$ui.runSubmit('resetTask', (unlockBtn) => {
+
+                //showCheckYesNo 確認: 是 → 重置; 否(reject 'close') → 結束流程; 開框前釋放按鈕鎖
+                unlockBtn()
+                return vo.$dg.showCheckYesNo(vo.$t('resetTaskConfirm'))
+                    .then(() => {
+                        return vo.doResetTask(taskId)
+                    })
+                    .catch(() => {})
+
+            }, opt)
 
         },
 
@@ -646,7 +660,8 @@ export default {
                 return 'ok'
             }
 
-            core()
+            //回傳流程之 promise, 供 retryTask 之 runSubmit 於結果訊息框關閉後才結束占位 (D16)
+            return core()
                 .catch((err) => {
                     console.log('catch', err)
                     vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
@@ -672,18 +687,13 @@ export default {
 
         onClickRespondBtn: function(msg) {
             // console.log('methods onClickRespondBtn')
-
+            //promiseUnlock 之鎖交由 doRespondTask 之 runSubmit 於請求結束時釋放, 不於此解鎖: 請求期間送出回應鈕之滑鼠與鍵盤 Enter 皆擋 (D16;
+            //原第一行即 pm.resolve, 鎖立即解除, 焦點留在按鈕時鍵盤連按可重複送出)
             let vo = this
-
-            //第一行立刻釋放按鈕視覺鎖
-            msg.pm.resolve()
-
-            //fire-and-forget
-            vo.doRespondTask()
-
+            vo.doRespondTask({ pm: msg.pm })
         },
 
-        doRespondTask: function() {
+        doRespondTask: function(opt = {}) {
             // console.log('methods doRespondTask')
 
             let vo = this
@@ -734,14 +744,17 @@ export default {
                 return 'ok'
             }
 
-            core()
-                .catch((err) => {
-                    console.log('catch', err)
-                    vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
-                })
-                .finally(() => {
-                    vo.$ui.updateLoading(false)
-                })
+            //runSubmit: 代回流程(至結果訊息框關閉)進行中再觸發即略過; opt.pm 為送出回應鈕之 promiseUnlock 鎖, 於請求結束(updateLoading(false))時釋放 (D16)
+            return vo.$ui.runSubmit('respondTask', () => {
+                return core()
+                    .catch((err) => {
+                        console.log('catch', err)
+                        vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
+                    })
+                    .finally(() => {
+                        vo.$ui.updateLoading(false)
+                    })
+            }, opt)
 
         },
 

@@ -20,10 +20,12 @@ let dbfDir = './dbf'
 //所有寫入用 woItems 直接操作 (insert / save / del), 不走 procOrm (避免 clearXSS 改動 markdown content / result);
 //稽核欄位手動處理: insert 用 ds[t].funNew({ ..., userId }) 產生; save 傳 { id, ..., timeUpdate, userIdUpdate }.
 //所有業務函式第一參數為 userId (操作者身分, 來自 token). 錯誤一律 return Promise.reject('errKey') (procLang 有定義).
+//併發控制兩種(皆由 WWebTask 建立後注入, procCore 本身不建 timer): kmx 為 wsemi pmKeyMutex(同 key 序列化, 用於須原子之讀改寫);
+//lockSave 為雙擊防護(見 lockSave.mjs, spec D16; 同一操作者之同一操作或同一列處理中再送出即 reject, 不排隊).
 function procCore(deps = {}) {
 
     //deps
-    let { woItems, procOrm, ds, srLog, kmx } = deps
+    let { woItems, procOrm, ds, srLog, kmx, lockSave } = deps
 
 
     //確保 dbf 圖台目錄存在 (檔案實體寫入落點)
@@ -66,35 +68,45 @@ function procCore(deps = {}) {
             return Promise.reject('errChannelRowInvalid')
         }
 
-        //save / insert
-        let r
-        let channelId
-        if (isestr(row.id)) {
-            //更新: 只存 row 實際帶入之 schema 欄位 + 稽核, 避免 funNew 補 '' 覆寫既有值
-            let o = pick(row, ds.channels.keys)
-            o.id = row.id
-            o.timeUpdate = nowms2str()
-            o.userIdUpdate = userId
-            r = await woItems.channels.save([o])
-            channelId = row.id
-        }
-        else {
-            //新筆: funNew 產完整列後 insert
-            let o = ds.channels.funNew({ ...row, userId })
-            r = await woItems.channels.insert(o)
-            channelId = o.id
-        }
+        //rowKey: 本次寫入之列識別 — 既有列以 id, 新列(未帶 id, 由後端 funNew 產生 id)以 name
+        let rowKey = isestr(row.id) ? row.id : get(row, 'name', '')
 
-        //確保主責 agent 有對應 channelMembers 列 (memberType='agent'), 僅 row.agentId 有帶且非空時執行
-        if (isestr(row.agentId) && row.agentId) {
-            let ms = await woItems.channelMembers.select({ channelId, memberId: row.agentId, isActive: 'y' })
-            if (!iseobj(get(ms, '0'))) {
-                let m = ds.channelMembers.funNew({ channelId, memberId: row.agentId, memberType: 'agent', userId })
-                await woItems.channelMembers.insert(m)
+        //雙擊防護(後端): 同一操作者對同一列之儲存處理中再送出即 reject 'saveInProgress'; 只擋同一列之連發, 同批其他列不受影響 (見 lockSave, D16)
+        return await lockSave('saveChannel', `${userId}:${rowKey}`, async () => {
+
+            //save / insert
+            let r
+            let channelId
+            if (isestr(row.id)) {
+                //更新: 只存 row 實際帶入之 schema 欄位 + 稽核, 避免 funNew 補 '' 覆寫既有值
+                let o = pick(row, ds.channels.keys)
+                o.id = row.id
+                o.timeUpdate = nowms2str()
+                o.userIdUpdate = userId
+                r = await woItems.channels.save([o])
+                channelId = row.id
             }
-        }
+            else {
+                //新筆: funNew 產完整列後 insert
+                let o = ds.channels.funNew({ ...row, userId })
+                r = await woItems.channels.insert(o)
+                channelId = o.id
+            }
 
-        return r
+            //確保主責 agent 有對應 channelMembers 列 (memberType='agent'), 僅 row.agentId 有帶且非空時執行.
+            //先 select 後 insert 以 kmx 包成原子: 不同操作者並行設同一 agentId 不重複建列; key 與 ackChannel 之游標列共用(同一 (channelId, memberId) 列) (D16)
+            if (isestr(row.agentId) && row.agentId) {
+                await kmx(`channelMember:${channelId}:${row.agentId}`, async () => {
+                    let ms = await woItems.channelMembers.select({ channelId, memberId: row.agentId, isActive: 'y' })
+                    if (!iseobj(get(ms, '0'))) {
+                        let m = ds.channelMembers.funNew({ channelId, memberId: row.agentId, memberType: 'agent', userId })
+                        await woItems.channelMembers.insert(m)
+                    }
+                })
+            }
+
+            return r
+        })
     }
 
 
@@ -106,9 +118,13 @@ function procCore(deps = {}) {
             return Promise.reject('errChannelIdInvalid')
         }
 
-        let r = await woItems.channels.del({ id })
+        //雙擊防護(後端): 同一操作者對同一列之刪除處理中再送出即 reject 'deleteInProgress' (見 lockSave, D16)
+        return await lockSave('deleteChannel', `${userId}:${id}`, async () => {
 
-        return r
+            let r = await woItems.channels.del({ id })
+
+            return r
+        }, { errKey: 'deleteInProgress' })
     }
 
 
@@ -134,23 +150,30 @@ function procCore(deps = {}) {
             return Promise.reject('errMemberRowInvalid')
         }
 
-        //save / insert
-        let r
-        if (isestr(row.id)) {
-            //更新: 只存 row 實際帶入之 schema 欄位 + 稽核, 避免 funNew 補 '' 覆寫既有值
-            let o = pick(row, ds.channelMembers.keys)
-            o.id = row.id
-            o.timeUpdate = nowms2str()
-            o.userIdUpdate = userId
-            r = await woItems.channelMembers.save([o])
-        }
-        else {
-            //新筆: funNew 產完整列後 insert
-            let o = ds.channelMembers.funNew({ ...row, userId })
-            r = await woItems.channelMembers.insert(o)
-        }
+        //rowKey: 本次寫入之列識別 — 既有列以 id, 新列(未帶 id, 由後端 funNew 產生 id)以「頻道:成員」
+        let rowKey = isestr(row.id) ? row.id : `${get(row, 'channelId', '')}:${get(row, 'memberId', '')}`
 
-        return r
+        //雙擊防護(後端): 同一操作者對同一列之儲存處理中再送出即 reject 'saveInProgress'; 只擋同一列之連發, 同批其他列不受影響 (見 lockSave, D16)
+        return await lockSave('saveChannelMember', `${userId}:${rowKey}`, async () => {
+
+            //save / insert
+            let r
+            if (isestr(row.id)) {
+                //更新: 只存 row 實際帶入之 schema 欄位 + 稽核, 避免 funNew 補 '' 覆寫既有值
+                let o = pick(row, ds.channelMembers.keys)
+                o.id = row.id
+                o.timeUpdate = nowms2str()
+                o.userIdUpdate = userId
+                r = await woItems.channelMembers.save([o])
+            }
+            else {
+                //新筆: funNew 產完整列後 insert
+                let o = ds.channelMembers.funNew({ ...row, userId })
+                r = await woItems.channelMembers.insert(o)
+            }
+
+            return r
+        })
     }
 
 
@@ -162,9 +185,13 @@ function procCore(deps = {}) {
             return Promise.reject('errMemberIdInvalid')
         }
 
-        let r = await woItems.channelMembers.del({ id })
+        //雙擊防護(後端): 同一操作者對同一列之刪除處理中再送出即 reject 'deleteInProgress' (見 lockSave, D16)
+        return await lockSave('deleteChannelMember', `${userId}:${id}`, async () => {
 
-        return r
+            let r = await woItems.channelMembers.del({ id })
+
+            return r
+        }, { errKey: 'deleteInProgress' })
     }
 
 
@@ -213,59 +240,65 @@ function procCore(deps = {}) {
             content = ''
         }
 
-        //kmx: 同頻道發訊序列化 (asTask 原子寫 message + task)
-        return await kmx('postMessage:' + channelId, async () => {
+        //雙擊防護(後端): 同一操作者對同一頻道之送出處理中再送出即 reject 'sendInProgress'(不排隊); 依序再送為使用者之新訊息, 不擋 (見 lockSave, D16).
+        //lockSave 包在 kmx 之外層: kmx 仍序列化不同操作者對同頻道之發訊
+        return await lockSave('postMessage', `${userId}:${channelId}`, async () => {
 
-            let asTask = cbol(get(opt, 'asTask', false))
-            let senderType = get(opt, 'senderType', 'human')
+            //kmx: 同頻道發訊序列化 (asTask 原子寫 message + task)
+            return await kmx('postMessage:' + channelId, async () => {
 
-            //attachments: opt.attachments 為陣列 (file id 清單) 時存 JSON 字串, 否則 '[]'
-            let attachmentsArr = get(opt, 'attachments')
-            let attachments = isarr(attachmentsArr) ? JSON.stringify(attachmentsArr) : '[]'
+                let asTask = cbol(get(opt, 'asTask', false))
+                let senderType = get(opt, 'senderType', 'human')
 
-            //insert message
-            let message = ds.messages.funNew({
-                channelId,
-                senderId: userId,
-                senderType,
-                kind: asTask ? 'task' : 'text',
-                content,
-                attachments,
-                userId,
-            })
-            await woItems.messages.insert(message)
+                //attachments: opt.attachments 為陣列 (file id 清單) 時存 JSON 字串, 否則 '[]'
+                let attachmentsArr = get(opt, 'attachments')
+                let attachments = isarr(attachmentsArr) ? JSON.stringify(attachmentsArr) : '[]'
 
-            //asTask: 開任務
-            if (asTask) {
-
-                //title: 缺省取 content 首行 (截斷至 100)
-                let title = get(opt, 'title', '') || content.split(/\r?\n/)[0].slice(0, 100)
-
-                //insert task
-                let task = ds.tasks.funNew({
+                //insert message
+                let message = ds.messages.funNew({
                     channelId,
-                    messageId: message.id,
-                    title,
-                    payload: content,
-                    state: 'pending',
+                    senderId: userId,
+                    senderType,
+                    kind: asTask ? 'task' : 'text',
+                    content,
+                    attachments,
                     userId,
                 })
-                await woItems.tasks.insert(task)
+                await woItems.messages.insert(message)
 
-                //save message: 回指 task.id
-                await woItems.messages.save({
-                    id: message.id,
-                    taskId: task.id,
-                    timeUpdate: nowms2str(),
-                    userIdUpdate: userId,
-                })
-                message.taskId = task.id
+                //asTask: 開任務
+                if (asTask) {
 
-                return { message, task }
-            }
+                    //title: 缺省取 content 首行 (截斷至 100)
+                    let title = get(opt, 'title', '') || content.split(/\r?\n/)[0].slice(0, 100)
 
-            return { message }
-        })
+                    //insert task
+                    let task = ds.tasks.funNew({
+                        channelId,
+                        messageId: message.id,
+                        title,
+                        payload: content,
+                        state: 'pending',
+                        userId,
+                    })
+                    await woItems.tasks.insert(task)
+
+                    //save message: 回指 task.id
+                    await woItems.messages.save({
+                        id: message.id,
+                        taskId: task.id,
+                        timeUpdate: nowms2str(),
+                        userIdUpdate: userId,
+                    })
+                    message.taskId = task.id
+
+                    return { message, task }
+                }
+
+                return { message }
+            })
+
+        }, { errKey: 'sendInProgress' })
     }
 
 
@@ -474,33 +507,38 @@ function procCore(deps = {}) {
             return Promise.reject('errLastMessageIdInvalid')
         }
 
-        //查 member 列
-        let ms = await woItems.channelMembers.select({ channelId, memberId: userId })
-        let m = get(ms, '0')
+        //查 member 列後 save / insert 以 kmx 包成原子: 並行 ack 同頻道同呼叫者不重複建列(原先 select 後 insert, 並行時可各建一列);
+        //key 與 saveChannel 確保主責 agent 成員列共用(同一 (channelId, memberId) 列, 呼叫者即主責 agent 時兩路徑互斥) (D16)
+        return await kmx(`channelMember:${channelId}:${userId}`, async () => {
 
-        if (iseobj(m)) {
-            //有則 save 推進游標
-            await woItems.channelMembers.save({
-                id: m.id,
-                lastSeenMessageId: lastMessageId,
-                timeUpdate: nowms2str(),
-                userIdUpdate: userId,
-            })
-        }
-        else {
-            //無則 insert (memberType='agent')
-            let o = ds.channelMembers.funNew({
-                channelId,
-                memberId: userId,
-                memberType: 'agent',
-                role: 'member',
-                lastSeenMessageId: lastMessageId,
-                userId,
-            })
-            await woItems.channelMembers.insert(o)
-        }
+            //查 member 列
+            let ms = await woItems.channelMembers.select({ channelId, memberId: userId })
+            let m = get(ms, '0')
 
-        return { ok: true }
+            if (iseobj(m)) {
+                //有則 save 推進游標
+                await woItems.channelMembers.save({
+                    id: m.id,
+                    lastSeenMessageId: lastMessageId,
+                    timeUpdate: nowms2str(),
+                    userIdUpdate: userId,
+                })
+            }
+            else {
+                //無則 insert (memberType='agent')
+                let o = ds.channelMembers.funNew({
+                    channelId,
+                    memberId: userId,
+                    memberType: 'agent',
+                    role: 'member',
+                    lastSeenMessageId: lastMessageId,
+                    userId,
+                })
+                await woItems.channelMembers.insert(o)
+            }
+
+            return { ok: true }
+        })
     }
 
 

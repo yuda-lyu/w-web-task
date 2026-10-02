@@ -54,6 +54,12 @@ export default {
 
             let vo = this
 
+            //單例: 新確認框取代開啟中之舊確認框時, 舊確認框之等待者視同選 No(reject('close'), 對已結束者無作用);
+            //否則其流程永久等待, 送出流程之 runSubmit 占位不釋放而該操作無法再觸發 (D16)
+            if (vo.pm) {
+                vo.pm.reject('close')
+            }
+
             //pm
             vo.pm = genPm()
 

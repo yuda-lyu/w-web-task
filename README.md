@@ -142,7 +142,7 @@ npx mocha test/e2e-channeltask.test.mjs --reporter list     # e2e (Playwright + 
 npm test                                                     # mocha 全跑 (test/*.test.mjs)
 ```
 
-e2e 規範詳 skill `role-code-for-test-e2e` 與 `spec/流程_*.md`.
+e2e 規範詳 skill `role-coder-for-test-e2e` 與 `spec/流程_*.md`.
 
 ## 認證 (委外 SSO)
 

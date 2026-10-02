@@ -3,7 +3,7 @@
 //雙角色：human token='sys'（id-for-admin）, agent token='agent-demo'（id=agent-demo）。
 //seed 由 startServersOnce 的 seedDb (g.initialData) 完成，含 demo channel + welcome message。
 import assert from 'assert'
-import { startServersOnce, cleanup, apiBaseUrl } from './e2e-setup.mjs'
+import { startServersOnce, cleanup, apiBaseUrl } from './tools/e2e-setup.mjs'
 
 
 const TOKEN_HUMAN = 'sys'         //id-for-admin（人類）

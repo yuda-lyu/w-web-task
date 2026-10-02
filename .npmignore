@@ -1,18 +1,24 @@
 node_modules
+.agents
 .opencode
 .claude
+AGENTS*.md
 CLAUDE*.md
+zAI*.md
 .env
 
-_logs
+logs
 db
+dbf
 uploadTemp
-testPending
 user_data
 
 tmp
+test/_tmp
+testPending
+
+dist/index.html
+tableTags-web-task.json
 
 test
 spec
-.agents
-AGENTS*.md

@@ -1,22 +1,30 @@
 //頻道任務調度 e2e（v2 聊天式工作區 UI）。對應 spec/流程_頻道任務調度.md。
-//雙模式：
-//  - 產 baseline：node test/e2e-channeltask.test.mjs --baseline （寫 test/pics/channeltask/）
-//  - 驗證（mocha）：npx mocha test/e2e-channeltask.test.mjs --reporter list （pixelmatch 反鋸齒感知 + maxDiffPixels 容差，非 byte-exact）
+//使用方式：
+//  1. 先產生標準圖：node test/e2e-channeltask.test.mjs --baseline （寫 test/pics/channeltask/）
+//  2. 跑測試比對：npx mocha test/e2e-channeltask.test.mjs --reporter list （pixelmatch 反鋸齒感知 + maxDiffPixels 容差，非 byte-exact）
+//  手術式重產（截圖前篩選, 規格詳 w-package-tools-e2e 之 README.md §2.2）: --names <項,...> 每項可帶語系前綴（eng-/cht-）, 不帶則兩語系皆產;
+//    階段圖鍵只寫該張, 案例鍵或編號前綴（如 E2E-005）寫該案全部階段, 不符任何鍵即報錯; --langs; --write-mode missing|changed;
+//    env E2E_BASELINE_OUT_DIR=<dir> 寫到暫存目錄（等價驗證用）。
+//    本檔多數案例單張（圖鍵＝案例鍵）; E2E-002/004/005 為兩階段（點擊前 -1-click-*、點擊後 -2-*，2026-09-28 E 第 1 期試點）;
+//    E2E-007 為三階段（輸入前 -1-type-payload、輸入後 -2-payload-typed、送出後 -3-sanitized; 2026-09-29 補圖, 原為語意-only）。
+//  產製端與比對端呼叫同一案例管線（runBaselineCase）: 每案 reseedBackend（E2E-013 另加封存種子）→ fresh browser → openApp → setLang
+//    → 流程（截圖）→ 語意斷言 → 寫檔 / 比對; 產製端另設 E2E_STRICT_CAPTURE=1（captureStable 未 settle 即拋錯, 不寫未穩定畫面）。
 //act 走 user-facing input（rail nav 真實滑鼠座標點擊 / 頻道列真實點擊 / Pattern D 鍵盤輸入）；
-//assert = UI 語意斷言 + pixel baseline（§6.2 / §6.3）。
+//assert = UI 語意斷言 + pixel baseline（全域 §16.1 / §16.2）。
 //
 //baseline 確定性：demo 種子之 messages / tasks / channels 時間欄位皆為固定字串（見 g.initialData.mjs），
 //UI 顯示之時間戳跨次 seed 完全一致 → pixel baseline 穩定。頻道名 / levels 為資料（恆中文），雙語下相同；
 //雙語 baseline 之差異僅在 i18n chrome（rail 標籤 / 標題 / pills / 按鈕 / grid 表頭）。
 //唯一帶 live 時間戳之 case 為 E2E-003（真實發訊），其視覺 baseline 改框「composer 發訊區」並於送出前截圖（避開 live 時間戳區）。
 //
-//DB 採 per-case reseed（§role-code-for-test-e2e「DB = per-case」hermetic 標準）：每 case beforeEach 還原 pristine demo 種子，
+//DB 採 per-case reseed（技能 role-coder-for-test-e2e §6「每 case 隔離：fresh browser + DB 重置」hermetic 標準）：每 case 於 runCase 之 prepare（產製端與比對端同）還原 pristine demo 種子，
 //故 E2E-003 發訊副作用不會污染後續 case（如 E2E-004 stats 之訊息計數），spec bullet 順序 / 檔案排序 / 執行順序三者一致且安全。
 import fs from 'fs'
 import path from 'path'
 import assert from 'assert'
 import { PNG } from 'pngjs'
-import { startServersOnce, reseedBackend, cleanup, launchBrowser, openApp, captureStableWithBox, waitUntilExist, assertBaselineMatch } from './e2e-setup.mjs'
+import { startServersOnce, reseedBackend, cleanup, tmpFile, launchBrowser, openApp, captureStableWithBox, waitUntilExist, assertBaselineMatch, setFakeNow, clearFakeNow, FAKE_NOW_RUNTIME } from './tools/e2e-setup.mjs'
+import { runBaselineCase, createBaselineGate, gridContentBox, itemsUnionBox } from './tools/e2eLib.mjs'
 
 const PICS_DIR = './test/pics/channeltask'
 const LANGS = ['eng', 'cht']
@@ -24,7 +32,8 @@ const isBaseline = process.argv.includes('--baseline')
 
 //E2E-006 上傳用之本地暫存 PNG（setup 階段準備之檔案; act 為點附圖鈕觸發 file input 後以 setInputFiles 選此檔）。
 //內容為確定性圖樣（固定 48×48 對角漸層）, 但其 file id / 時間戳於上傳後為 live 值, 故不對含此 img 之時間軸做 pixel baseline。
-const UPLOAD_PNG = './tmp/e2e-up.png'
+//落點為 harness 之測試中介檔目錄（test/_tmp/e2e-harness/files/, gitignore; cleanup 時刪除）, 不用 AI 暫存區 ./tmp/（隨時可能被清除）。
+const UPLOAD_PNG = tmpFile('e2e-up.png')
 function ensureUploadPng() {
     if (fs.existsSync(UPLOAD_PNG)) { return }
     fs.mkdirSync(path.dirname(UPLOAD_PNG), { recursive: true })
@@ -47,12 +56,15 @@ const CH_DEMO_ID = 'id-for-channel-demo'
 const CH_DEMO_NAME = '訂單服務'
 
 //紅框標注目標（captureStableWithBox）：本 case 主要觀看區（皆為穩定 data-fmid / ag-grid 容器）
-const SEL_TREE = '[data-fmid="channel-tree"]'          //左2 頻道階層樹（含標題 + 搜尋 + 樹）
-const SEL_TIMELINE = '[data-fmid="chat-timeline"]'     //聊天時間軸（訊息氣泡）
+//框「實際有內容之項目」而非整欄 / 整區（技能 role-coder-for-test-e2e §7.2、§7.3-2；2026-09-28 改：原框整個樹面板、整個時間軸、整個表格外框，
+//列少時框進大片空白）：樹與時間軸以 itemsUnionBox 取可見項目之聯集、表格以 gridContentBox 取標頭＋可見資料列
+const SEL_TREE_LIST = '[data-fmid="channel-tree-list"]' //左2 頻道階層樹之列表區（群組列 .tnode ＋ 頻道列 .chan）
+const SEL_TIMELINE = '[data-fmid="chat-timeline"]'     //聊天時間軸（日期分隔 .day ＋ 訊息列 .msg）
 const SEL_COMPOSER = '[data-fmid="composer"]'          //底部 composer 發訊區（textarea + 工具列 + 送出鈕）
 const SEL_STATS_OVERVIEW = '[data-fmid="stats-overview"]' //統計 OVERVIEW 卡片區（CHANNELS/MESSAGES/TASKS）
-const SEL_GRID = '.ag-root-wrapper'                    //後台 Channels ag-grid
-const SEL_MEMBERS_DIALOG = '[data-fmid="channel-members-dialog"]' //本頻道成員管理 dialog（成員清單 grid）
+const SEL_GRID = '.ag-root-wrapper'                    //後台資料表（ag-grid 外框; 紅框經 gridContentBox 取標頭＋可見資料列）
+const SEL_MEMBERS_DIALOG = '[data-fmid="channel-members-dialog"]' //本頻道成員管理 dialog 之內容區（成員清單 grid）
+const SEL_DIALOG_PANEL = 'div[style*="overscroll-behavior"] div[tabindex="0"] > div' //WDialog 面板（標題列＋內容; 與 w-web-perm SEL_MODAL 同）
 const SEL_TASK_DETAIL = '[data-fmid="task-detail"]'   //後台任務子頁之任務詳情面板（payload/result + 回應/重試入口）
 
 function picPath(lang, name) { return `${PICS_DIR}/channeltask-${lang}-${name}.png` }
@@ -86,7 +98,7 @@ async function setLang(page, lang) {
 
 //真實滑鼠點擊左1 rail 之 nav item（user-facing L2 絕對座標, 取元素 boundingBox 中心）。
 //以 data-fmid="rail-nav-{key}" 精準定位（避免 getByText 誤命中頻道樹標題「Channels」h2 等同字元素）。
-async function clickRail(page, key) {
+async function waitRail(page, key) {
     let sel = `[data-fmid="rail-nav-${key}"]`
     await waitUntilExist(page, `rail nav「${key}」就緒`, (s) => {
         let e = document.querySelector(s)
@@ -94,6 +106,10 @@ async function clickRail(page, key) {
         let r = e.getBoundingClientRect()
         return r.width > 0 && r.height > 0
     }, { timeout: 15000, arg: sel })
+    return sel
+}
+async function clickRail(page, key) {
+    let sel = await waitRail(page, key)
     let box = await page.locator(sel).first().boundingBox()
     if (!box) { throw new Error(`找不到 rail nav item「${key}」boundingBox`) }
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
@@ -272,14 +288,16 @@ async function editRoleCell(page, rowIndex, value) {
     await page.waitForTimeout(400)
 }
 
-//case 定義：run(page,lang) 走流程並回傳截圖 buffer（或多階段 [{name,buf}]）；mocha 模式再加語意斷言。
+//case 定義：run(page,lang) 走流程並回傳截圖 buffer（或多階段 [{name,buf}]）；semantic(page,lang) 於產製端與比對端皆在寫檔／比對前執行（runCase）。
+//stages＝該案產出之圖鍵（多數單張, 圖鍵＝案例鍵; E2E-002/004/005 兩階段; E2E-007 三階段）; 陣列順序＝mocha it 順序＝產製順序。
 const CASES = [
     {
         //E2E-001：登入後預設停在頻道區, 階層頻道樹顯示專案 > 群組 > #頻道
         name: 'E2E-001-channels-tree',
+        stages: ['E2E-001-channels-tree'],
         run: async (page) => {
             await waitTreeReady(page) //預設 section=channels, 等樹渲染到位
-            return await captureStableWithBox(page, SEL_TREE) //觀看區：頻道階層樹
+            return await captureStableWithBox(page, itemsUnionBox('.tnode, .chan', { within: SEL_TREE_LIST })) //結果: 頻道階層樹列出專案、群組與頻道(框住樹之各列)
         },
         semantic: async (page) => {
             let txt = await page.evaluate(() => document.body.innerText)
@@ -292,10 +310,16 @@ const CASES = [
     },
     {
         //E2E-002：點頻道 → 右側聊天時間軸顯示四則種子訊息（text/text/task/taskReply）+ 任務 pills
+        //每個操作兩張（技能 §7.1；E 第 1 期試點 2026-09-28）：點擊前框頻道列 → 點擊後框時間軸。
+        //本案之「點頻道列」兩張兼作 E2E-003/006/007/008/011/012 首步之共用圖（技能 §7.8 型①，見 spec 各案驗證 bullet）
         name: 'E2E-002-chat-view',
+        stages: ['E2E-002-1-click-channel', 'E2E-002-2-chat-view'],
         run: async (page) => {
+            await waitTreeReady(page)
+            let s1 = await captureStableWithBox(page, `[data-fmid="channel-item-${CH_DEMO_ID}"]`) //點擊前: 框住頻道樹「訂單服務」列整列
             await gotoChat(page)
-            return await captureStableWithBox(page, SEL_TIMELINE) //觀看區：訊息時間軸
+            let s2 = await captureStableWithBox(page, itemsUnionBox('.day, .msg', { within: SEL_TIMELINE })) //結果: 時間軸顯示種子訊息(框住日期分隔與四則訊息)
+            return [{ name: 'E2E-002-1-click-channel', buf: s1 }, { name: 'E2E-002-2-chat-view', buf: s2 }]
         },
         semantic: async (page) => {
             let txt = await page.evaluate(() => document.body.innerText)
@@ -321,6 +345,7 @@ const CASES = [
         //E2E-003：點頻道 → composer 真鍵盤輸入文字 → Enter 送出 → 新訊息出現於時間軸 + textarea 清空
         //視覺 baseline 對「composer 發訊區」於送出前（內容填妥）截圖, 避開新訊息之 live 時間戳區。
         name: 'E2E-003-chat-send',
+        stages: ['E2E-003-chat-send'],
         run: async (page, lang) => {
             await gotoChat(page)
             let msg = `e2e post message ${lang}`
@@ -346,8 +371,12 @@ const CASES = [
     },
     {
         //E2E-004：切 Stats → 儀表板 OVERVIEW 顯示 CHANNELS/MESSAGES/TASKS 計數
+        //每個操作兩張（E 第 1 期試點 2026-09-28）：點擊前框 rail「統計」項整顆 → 點擊後框 OVERVIEW 卡片區
         name: 'E2E-004-stats',
+        stages: ['E2E-004-1-click-stats', 'E2E-004-2-stats'],
         run: async (page) => {
+            await waitTreeReady(page) //進站落地（頻道區）就緒
+            let s1 = await captureStableWithBox(page, await waitRail(page, 'stats')) //點擊前: 框住左1 rail 之「統計」項整顆（圖示與文字）
             await clickRail(page, 'stats') //真實點擊 rail 之 Stats nav
             await waitUntilExist(page, '統計 OVERVIEW 區就緒', () => {
                 let e = document.querySelector('[data-fmid="stats-overview"]')
@@ -356,7 +385,8 @@ const CASES = [
                 return r.width > 0
             }, { timeout: 20000 })
             await page.waitForTimeout(500)
-            return await captureStableWithBox(page, SEL_STATS_OVERVIEW) //觀看區：OVERVIEW 卡片區
+            let s2 = await captureStableWithBox(page, SEL_STATS_OVERVIEW) //結果: OVERVIEW 卡片區
+            return [{ name: 'E2E-004-1-click-stats', buf: s1 }, { name: 'E2E-004-2-stats', buf: s2 }]
         },
         semantic: async (page) => {
             //scope 到 OVERVIEW 卡片區 innerText（避免 body 其他數字干擾計數斷言）
@@ -378,13 +408,19 @@ const CASES = [
     },
     {
         //E2E-005：切 Admin → 預設 Channels 子頁 ag-grid 顯示 Levels 欄與頻道列
+        //每個操作兩張（E 第 1 期試點 2026-09-28）：點擊前框 rail「後台」項整顆 → 點擊後框資料表。
+        //本案之「點後台」點擊前圖兼作 E2E-009/010/013 首步之共用圖（技能 §7.8 型①）
         name: 'E2E-005-admin-channels',
+        stages: ['E2E-005-1-click-admin', 'E2E-005-2-admin-channels'],
         run: async (page) => {
+            await waitTreeReady(page) //進站落地（頻道區）就緒
+            let s1 = await captureStableWithBox(page, await waitRail(page, 'admin')) //點擊前: 框住左1 rail 之「後台」項整顆（圖示與文字）
             await clickRail(page, 'admin') //真實點擊 rail 之 Admin nav
             //預設子頁為 Channels（AdminView subKey='mmChannels' → LayoutContentChannels）, 等 grid 列出現
             await waitUntilExist(page, '後台頻道 grid 列載入', () => document.querySelectorAll('.ag-row').length > 0, { timeout: 20000 })
             await page.waitForTimeout(500)
-            return await captureStableWithBox(page, SEL_GRID) //觀看區：後台頻道 grid
+            let s2 = await captureStableWithBox(page, gridContentBox(SEL_GRID)) //結果: 後台頻道資料表(框住標頭與頻道列)
+            return [{ name: 'E2E-005-1-click-admin', buf: s1 }, { name: 'E2E-005-2-admin-channels', buf: s2 }]
         },
         semantic: async (page) => {
             let txt = await page.evaluate(() => document.body.innerText)
@@ -401,6 +437,7 @@ const CASES = [
         //→ 時間軸出現一則含附件 img（src 含 getFile）之新訊息; textarea 仍空。
         //視覺 baseline 對「composer 預覽縮圖區」於送出前截圖（避開時間軸之 live file id / 時間戳; 預覽縮圖渲染像素為固定來源圖 → 穩定）。
         name: 'E2E-006-chat-upload-image',
+        stages: ['E2E-006-chat-upload-image'],
         run: async (page) => {
             await gotoChat(page)
             //act：點附圖鈕（使用者真實點擊, 真實情境會開檔案選取器）後, 以 setInputFiles 於隱藏 file input 選檔（檔案選取之 user-facing 路徑, 非 .fill/vm）
@@ -439,21 +476,40 @@ const CASES = [
     {
         //E2E-007：發送挾帶 HTML 之惡意訊息 → 時間軸渲染前經消毒 → onerror 不執行 / DOM 無 onerror 屬性 / 純文字保留。
         //安全回歸守衛（審計確認之儲存型 XSS 修復）：content 經 showdown→v-html 渲染, 若無 DOMPurify 消毒, <img onerror> 會於檢視者瀏覽器執行 JS。
-        //語意-only（run 回 [] 不產 baseline）：消毒為 DOM 語意性質, 視覺上「已消毒」與「未消毒」之純文字渲染無從以 pixel 區辨,
-        //且發訊後訊息帶 live 時間戳無穩定視覺可比; composer/時間軸之視覺 baseline 已由 E2E-002/E2E-003 覆蓋。
+        //安全性由語意斷言判定（「已消毒」與「未消毒」之像素無從區辨）; 三張圖為操作手冊之用（2026-09-29 業主裁示補圖, 原為語意-only）:
+        //輸入一個欄位（輸入前、輸入後）＋按 Enter 鍵送出（輸入後之圖兼作送出前, 同一發訊區相鄰兼任）; 首步「點頻道列」共用 E2E-002 兩張。
+        //送出後之新訊息帶時間戳 → 送出前開啟假時鐘（setFakeNow: 後端寫入之 timeCreate 固定為執行期錨點）, 送出後即關閉。
         //eng/cht 皆跑（消毒與語系無關, 兩語系下皆須成立）。
         name: 'E2E-007-xss-sanitized',
+        stages: ['E2E-007-1-type-payload', 'E2E-007-2-payload-typed', 'E2E-007-3-sanitized'],
         run: async (page) => {
             await gotoChat(page)
             await page.evaluate(() => { window.__xss7 = undefined }) //清旗標, 供「onerror 是否執行」判定
+            let ta = page.locator('[data-fmid="composer-textarea"]').first()
+            let s1 = await captureStableWithBox(page, ta) //輸入前: 框住發訊區輸入框整顆
             //惡意 payload：onerror 於 <img src=x> 載入失敗時觸發 → 未消毒則 window.__xss7=1; 'hello-xss-text' 為內容保留之探針
             let payload = '<img src=x onerror="window.__xss7=1">hello-xss-text'
             await typeIntoTextarea(page, payload) //Pattern D 真實鍵盤輸入（含角括號之原始 HTML）
-            await page.locator('[data-fmid="composer-textarea"]').first().click()
-            await page.keyboard.press('Enter') //真實 Enter 送出
-            await waitUntilExist(page, '惡意訊息之文字探針渲染進時間軸', () => (document.body.innerText || '').includes('hello-xss-text'), { timeout: 15000 })
-            await page.waitForTimeout(600) //予 img 載入失敗 + (若未消毒) onerror 觸發之時間窗, 確保負向斷言有效
-            return [] //語意-only, 不產 baseline
+            let s2 = await captureStableWithBox(page, SEL_COMPOSER) //結果: 輸入框內為剛輸入之內容（框住發訊區: 輸入框＋工具列＋送出鈕; 兼作按 Enter 鍵之前圖）
+            let s3
+            setFakeNow(FAKE_NOW_RUNTIME) //新訊息之 timeCreate 固定, 使送出後之圖確定
+            try {
+                await ta.click()
+                await page.keyboard.press('Enter') //真實 Enter 送出
+                await waitUntilExist(page, '惡意訊息之文字探針渲染進時間軸', () => (document.body.innerText || '').includes('hello-xss-text'), { timeout: 15000 })
+                await waitUntilExist(page, '新訊息之時間戳為假時鐘錨點', (t) => (document.body.innerText || '').includes(t), { timeout: 15000, arg: FAKE_NOW_RUNTIME })
+                await page.waitForTimeout(600) //予 img 載入失敗 + (若未消毒) onerror 觸發之時間窗, 確保負向斷言有效
+                //結果: 時間軸最下方出現該則訊息, 文字照常顯示、圖片標籤顯示為無法載入之圖片（框住該則訊息）
+                s3 = await captureStableWithBox(page, itemsUnionBox(page.locator(`${SEL_TIMELINE} .msg`).last(), { fit: true }))
+            }
+            finally {
+                clearFakeNow()
+            }
+            return [
+                { name: 'E2E-007-1-type-payload', buf: s1 },
+                { name: 'E2E-007-2-payload-typed', buf: s2 },
+                { name: 'E2E-007-3-sanitized', buf: s3 },
+            ]
         },
         semantic: async (page) => {
             //spec E2E-007（1）：onerror 未執行（DOMPurify 已剝離 inline event handler）
@@ -479,6 +535,7 @@ const CASES = [
         //baseline 對「成員 dialog」於 view 模式（僅 agent-demo 一列, 種子時間戳固定 → 穩定）截圖; CRUD 階段帶動態 id 不另存視覺。
         //清理: 本案例最終刪除自身新增之成員, DB 回歸 pristine（agent-demo 一列）; per-case reseed 亦保底。
         name: 'E2E-008-channel-members-crud',
+        stages: ['E2E-008-channel-members-crud'],
         run: async (page, lang) => {
             await gotoChat(page)
             //act(R)：真實點擊標題列「成員」入口 → 開本頻道成員管理 dialog
@@ -488,8 +545,8 @@ const CASES = [
                 return !!el && (el.innerText || '').includes('agent-demo')
             }, { timeout: 20000 })
             await page.waitForTimeout(400)
-            //視覺 baseline：view 模式之成員 dialog（agent-demo 一列; 觀看區紅框）
-            let shot = await captureStableWithBox(page, SEL_MEMBERS_DIALOG)
+            //視覺 baseline：view 模式之成員 dialog（agent-demo 一列）；結果: 成員視窗開啟(框住整個視窗含標題列; 2026-09-28 改: 原只框內容區, 漏標題列)
+            let shot = await captureStableWithBox(page, page.locator(SEL_DIALOG_PANEL).filter({ has: page.locator(SEL_MEMBERS_DIALOG) }))
 
             let ok = await page.evaluate(() => window.$vo.$t('ok'))
             let yes = await page.evaluate(() => window.$vo.$t('yes'))
@@ -583,13 +640,14 @@ const CASES = [
         //E2E-009：後台管理 → 任務子頁, 資料表顯示頻道任務清單（標題 / 狀態 / 認領者 / 時間）。
         //切後台後預設頻道子頁, 點「任務」子頁 → LayoutContentTasks 以頻道選擇器預設頻道（demo）載入其 3 筆種子任務。
         name: 'E2E-009-admin-tasks',
+        stages: ['E2E-009-admin-tasks'],
         run: async (page) => {
             await clickRail(page, 'admin') //真實點擊 rail 之 Admin nav
             await waitUntilExist(page, '後台任務子頁鈕就緒', () => !!document.querySelector('[data-fmid="admin-sub-mmTasks"]'), { timeout: 20000 })
             await page.locator('[data-fmid="admin-sub-mmTasks"]').first().click() //真實點擊「任務」子頁
             await waitUntilExist(page, '後台任務 grid 種子任務載入', () => (document.body.innerText || '').includes('Summarize quarterly report'), { timeout: 20000 })
             await page.waitForTimeout(500)
-            return await captureStableWithBox(page, SEL_GRID) //觀看區：後台任務 grid
+            return await captureStableWithBox(page, gridContentBox(SEL_GRID)) //結果: 後台任務資料表(框住標頭與三筆任務列)
         },
         semantic: async (page) => {
             let gridTxt = await page.evaluate(() => {
@@ -614,13 +672,14 @@ const CASES = [
         //後台成員子頁之 LayoutContentMembers 無 fixedChannelId → 顯示頻道選擇器, 預設頻道（demo）載入其成員 agent-demo。
         //與 E2E-008（聊天頁入口, 綁定頻道 → 隱藏選擇器）互補: 同一元件於後台入口顯示選擇器、於頻道入口隱藏。
         name: 'E2E-010-admin-members',
+        stages: ['E2E-010-admin-members'],
         run: async (page) => {
             await clickRail(page, 'admin') //真實點擊 rail 之 Admin nav
             await waitUntilExist(page, '後台成員子頁鈕就緒', () => !!document.querySelector('[data-fmid="admin-sub-mmMembers"]'), { timeout: 20000 })
             await page.locator('[data-fmid="admin-sub-mmMembers"]').first().click() //真實點擊「成員」子頁
             await waitUntilExist(page, '後台成員 grid 載入 agent-demo', () => (document.body.innerText || '').includes('agent-demo'), { timeout: 20000 })
             await page.waitForTimeout(500)
-            return await captureStableWithBox(page, SEL_GRID) //觀看區：後台成員 grid
+            return await captureStableWithBox(page, gridContentBox(SEL_GRID)) //結果: 後台成員資料表(框住標頭與成員列)
         },
         semantic: async (page) => {
             let gridTxt = await page.evaluate(() => {
@@ -644,6 +703,7 @@ const CASES = [
         //全程真實 UI: 頻道列點擊、toggle 點擊、Pattern D 鍵盤輸入(標題+內容)、送出鈕點擊、rail/子頁點擊。
         //清理: 新增之任務型訊息與 pending 任務由 per-case reseed（rm ./db 重建 pristine）還原（同 E2E-003 副作用機制）。
         name: 'E2E-011-compose-as-task',
+        stages: ['E2E-011-compose-as-task'],
         run: async (page, lang) => {
             await gotoChat(page)
             let title = `e2e task title ${lang}`
@@ -701,6 +761,7 @@ const CASES = [
         //   → 破壞 grid 區之 pixel 穩定, 故提前至代回前擷取, 以符合 spec「種子時間戳固定 → 穩定」之前提（非改 spec, 為忠實其穩定性意圖）。
         //清理: 改動之任務狀態與新增之 taskReply 訊息由 per-case reseed 還原。
         name: 'E2E-012-task-detail',
+        stages: ['E2E-012-task-detail'],
         run: async (page, lang) => {
             let RUNNING_TASK = 'id-for-task-demo-pending' //base seed pending, 前置認領推進為 running 供代回
             let ERROR_TASK = 'id-for-task-demo-error'      //base seed error, 供重試
@@ -772,11 +833,12 @@ const CASES = [
     {
         //E2E-013：後台任務子頁切「顯示封存」→ 清單改列封存冷表(tasksArchive)且唯讀; 切回關閉恢復熱表活躍任務。
         //arrange：封存冷表無 base seed 種子, 由 reseedBackend({ withArchivedTask:true }) 於 backend 未持有 lmdb 之視窗
-        //  直寫一筆固定種子封存任務（'Archived quarterly summary', 見 test/seed-archived-task.mjs）。此前置在 openApp 前執行,
-        //  故 arrange hook 置於 it()/generateBaseline 之 openApp 之前; 封存種子於下一 case reseed(rm ./db) 自動清除。
+        //  直寫一筆固定種子封存任務（'Archived quarterly summary', 見 test/tools/seed-archived-task.mjs）。此前置在 openApp 前執行,
+        //  故 arrange 由 runCase 之 prepare 於 reseedBackend() 之後、launch／openApp 之前呼叫（產製端與比對端同）; 封存種子於下一 case reseed(rm ./db) 自動清除。
         //視覺 baseline 對「後台任務 grid（顯示封存啟用態, 列封存任務）」截圖（種子時間戳固定 → 穩定）。
         //清理：唯讀切換無資料副作用; arrange 寫入之封存種子由 per-case reseed 還原。
         name: 'E2E-013-tasks-archived',
+        stages: ['E2E-013-tasks-archived'],
         arrange: async () => { await reseedBackend({ withArchivedTask: true }) }, //封存種子前置（backend 未持有 lmdb 時直寫冷表）
         run: async (page) => {
             await gotoAdminTasks(page)
@@ -788,8 +850,8 @@ const CASES = [
                 return !!e && (e.innerText || '').includes('Archived quarterly summary')
             }, { timeout: 20000 })
             await page.waitForTimeout(500)
-            //視覺：後台任務 grid（顯示封存啟用態, 列封存任務）
-            return await captureStableWithBox(page, SEL_GRID)
+            //視覺：後台任務 grid（顯示封存啟用態, 列封存任務）；結果: 清單改列封存任務(框住標頭與封存任務列)
+            return await captureStableWithBox(page, gridContentBox(SEL_GRID))
         },
         semantic: async (page) => {
             //spec E2E-013 驗證第1點：切換啟用後清單列出封存冷表之已封存任務
@@ -817,75 +879,80 @@ const CASES = [
     },
 ]
 
-//手術式重產（§6.3）：--names a,b,c 只產指定 case；--langs eng,cht 只產指定語系。截圖「前」就 gate（省截圖成本）。
-function argList(flag) {
-    let i = process.argv.indexOf(flag)
-    if (i >= 0 && process.argv[i + 1]) { return process.argv[i + 1].split(',').map((s) => s.trim()).filter(Boolean) }
-    return null
+//單一案例管線（產製端與比對端共用, runBaselineCase）：
+//  prepare（per-case reseedBackend → case 專屬 arrange）→ launch（per-case fresh browser）→ openPage（openApp）→ beforeRun（setLang）
+//  → run（流程＋截圖）→ semantic（語意斷言, 寫檔／比對前必過）→ 產製端依 gate 寫檔 / 比對端 assertBaselineMatch → finally 關瀏覽器。
+//前置順序以原產製端為準（reseedBackend → arrange → launchBrowser）; 原比對端為 beforeEach 之 reseedBackend → launchBrowser 後才於 it 內 arrange。
+async function runCase(mode, lang, c, extra = {}) {
+    return await runBaselineCase({
+        mode,
+        lang,
+        name: c.name,
+        run: c.run,
+        stages: c.stages,
+        allowEmpty: !!c.allowEmpty,
+        semantic: c.semantic ? (ctx) => c.semantic(ctx.page, ctx.lang) : null,
+        launch: launchBrowser, //per-case fresh browser（每 case 全新 browser 進程, 消 cross-case GPU/font/CSS cache 累積差異）
+        openPage: (browser) => openApp(browser), //runBaselineCase 以 (browser, ctx) 呼叫; openApp 之第二參數為 newContext 選項, 不可傳入 ctx
+        pathOf: picPath,
+        labelOf: (lg, key) => `channeltask-${lg}-${key}`,
+        match: assertBaselineMatch,
+        prepare: async () => {
+            await reseedBackend() //per-case reseed：還原 pristine demo 種子, 消除 E2E-003 發訊副作用對後續 case 之污染
+            if (c.arrange) {
+                await c.arrange() //case 專屬前置（如 E2E-013 封存種子; 須在 openApp 前, backend 重啟不影響尚未連線之 browser）
+            }
+        },
+        beforeRun: async (ctx) => {
+            await setLang(ctx.page, ctx.lang) //eng 也走（symmetric, 補等同 cht setLang 之 settle）
+        },
+        ...extra,
+    })
 }
-function nameMatch(list, caseName) { return list.some((nm) => caseName === nm || caseName.startsWith(nm)) }
 
 async function generateBaseline() {
     console.log('=== 產製 channeltask baseline 開始 ===')
-    let onlyNames = argList('--names')
-    let onlyLangs = argList('--langs')
+    process.env.E2E_STRICT_CAPTURE = '1' //產製端 captureStable 未 settle 即拋錯, 不寫未穩定畫面（比對端不設: 回傳最後一張交由比對揭露 flake）
+    //截圖前篩選（--names / --langs / --write-mode / E2E_BASELINE_OUT_DIR）; 不符任何鍵即於此報錯（先於 ensureUploadPng 與 startServersOnce）
+    let gate = createBaselineGate({ langs: LANGS, cases: CASES })
+    console.log(gate.describe())
     ensureUploadPng() //E2E-006 上傳用之本地暫存 PNG（setup 階段準備）
     await startServersOnce()
     fs.mkdirSync(PICS_DIR, { recursive: true })
-    for (let lang of LANGS) {
-        if (onlyLangs && !nameMatch(onlyLangs, lang)) { continue } //§6.3 手術式：跳過未指定語系
-        for (let c of CASES) {
-            if (onlyNames && !nameMatch(onlyNames, c.name)) { continue } //§6.3 手術式：截圖前 gate
-            await reseedBackend() //per-case reseed：還原 pristine demo 種子, 消除 E2E-003 發訊副作用對後續 case 之污染
-            if (c.arrange) { await c.arrange() } //case 專屬前置（如 E2E-013 封存種子; 須在 openApp 前, backend 重啟不影響尚未連線之 browser）
-            //per-case fresh browser（每 case 全新 browser 進程, 消 cross-case GPU/font/CSS cache 累積差異）
-            let browser = await launchBrowser()
-            let page = await openApp(browser)
-            await setLang(page, lang) //eng 也走（symmetric, 補等同 cht setLang 之 settle）
-            let shots = await c.run(page, lang)
-            if (Buffer.isBuffer(shots)) { shots = [{ name: c.name, buf: shots }] }
-            for (let s of shots) {
-                fs.writeFileSync(picPath(lang, s.name), s.buf)
-                console.log('wrote', picPath(lang, s.name), s.buf.length, 'bytes')
-            }
-            await browser.close()
+    for (let lang of gate.langs) {
+        for (let c of gate.casesFor(lang)) {
+            console.log(`  ${lang}-${c.name}`)
+            let r = await runCase('regen', lang, c, { gate })
+            console.log(`  ✔ ${lang}-${c.name} (寫出 ${r.written.length} 張, 略過 ${r.skipped.length}, 保留 ${r.kept.length})`)
         }
     }
+    //--names 之任一項未產出即報錯（不靜默略過; 例: 指定之案例於本輪未產出任何圖）
+    gate.finalize()
     cleanup() //【必】非 mocha 環境須顯式呼叫, 否則 process 不退
     console.log('=== 產製 channeltask baseline 完成 ===')
 }
 
 if (isBaseline) {
-    generateBaseline().catch((err) => { console.log('baseline 例外', err); cleanup(); process.exit(1) })
+    generateBaseline().catch((err) => {
+        console.log('baseline 例外', err)
+        cleanup()
+        process.exit(1)
+    })
 }
 else {
     for (let lang of LANGS) {
         describe(`e2e-channeltask (${lang})`, function() {
             this.timeout(180000)
-            let browser = null
             before(async function() {
                 this.timeout(220000)
                 ensureUploadPng() //E2E-006 上傳用之本地暫存 PNG（setup 階段準備）
-                await startServersOnce() //port 已起→reuse；DB 由 startServersOnce 之 seedDb 重建為 base seed
+                await startServersOnce() //首次呼叫起本 harness 自建之測試實例並重建 base seed；本行程已起則沿用（port 被他者佔用即拋錯）
             })
-            //per-case fresh browser + per-case reseed（§role-code-for-test-e2e: browser/DB 皆 per-case）
-            beforeEach(async function() {
-                this.timeout(90000)
-                await reseedBackend() //per-case 還原 pristine demo 種子（消 E2E-003 發訊副作用; 確保任一 case 單跑 / 全跑一致）
-                browser = await launchBrowser()
-            })
-            afterEach(async function() { if (browser) { await browser.close(); browser = null } })
+            //per-case reseed + fresh browser + setLang 由 runCase 負責（原 beforeEach 之 reseedBackend／launchBrowser 與 afterEach 之 browser.close 已移入）,
+            //確保 --grep 單跑與全跑一致; 語意斷言在比對標準圖之前（pixel baseline 為補強層）
             for (let c of CASES) {
-                it(c.name, async () => {
-                    if (c.arrange) { await c.arrange() } //case 專屬前置（如 E2E-013 封存種子; 在 openApp 前執行, backend 重啟不影響尚未連線之 browser）
-                    let page = await openApp(browser)
-                    await setLang(page, lang)
-                    let shots = await c.run(page, lang)
-                    if (c.semantic) { await c.semantic(page, lang) }
-                    if (Buffer.isBuffer(shots)) { shots = [{ name: c.name, buf: shots }] }
-                    for (let s of shots) {
-                        assertBaselineMatch(s.buf, picPath(lang, s.name), `channeltask-${lang}-${s.name}`)
-                    }
+                it(c.name, async function() {
+                    await runCase('compare', lang, c, { onKnownDefect: () => this.skip() }) //已知缺陷協定: 標 pending(提示框殘留已由 w-component-vue 2.5.24 修正, 其偵測改為直接失敗, 見 e2e-setup probeStuckTooltip)
                 })
             }
         })

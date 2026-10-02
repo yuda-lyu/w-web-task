@@ -6,8 +6,8 @@
 //reseedBackend({ withArchivedTask:true }) 在「backend 已殺、尚未重啟」之視窗內 spawn 本腳本, 寫完即被殺,
 //全程僅單一 process 持有 lmdb（與 seedDb→g.initialData 同一安全模型）。
 //時間欄位以固定值覆寫確保 pixel baseline 穩定（比照 g.initialData 之固定時間戳處理）。
-import ds from '../src/schema/index.mjs'
-import { woItems } from '../g.mOrm.mjs'
+import ds from '../../src/schema/index.mjs'
+import { woItems } from '../../g.mOrm.mjs'
 
 
 let TSA = '2026-01-01T00:00:00.000+08:00' //固定基準時間戳（跨次 seed 一致 → baseline 穩定）

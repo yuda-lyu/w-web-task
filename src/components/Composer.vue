@@ -165,7 +165,6 @@ export default {
 
             attachments: [], //[{ id, name, url }] 已上傳完成者
             uploading: false, //上傳中旗標 (顯 loading 縮圖)
-            sending: false, //發送中旗標 (防 Enter 重複觸發)
 
             focused: false,
 
@@ -233,7 +232,7 @@ export default {
 
         },
 
-        //Enter 發送 (Shift+Enter 換行)
+        //Enter 發送 (Shift+Enter 換行); 非按鈕入口不帶 pm, 與發送鈕共用 doSend 之 runSubmit('postMessage') 狀態 (D16)
         onKeydown: function(ev) {
             let vo = this
             if (ev.key === 'Enter' && !ev.shiftKey) {
@@ -339,21 +338,16 @@ export default {
             vo.attachments = filter(vo.attachments, (a) => a.id !== id)
         },
 
-        //發送按鈕: 第一行釋放視覺鎖 + fire-and-forget doSend
         onClickSendBtn: function(msg) {
+            //promiseUnlock 之鎖交由 doSend 之 runSubmit 於請求結束時釋放, 不於此解鎖: 請求期間發送鈕之滑鼠與鍵盤 Enter 皆擋 (D16;
+            //原第一行即 pm.resolve, 鎖立即解除, 焦點留在發送鈕時鍵盤連按可重複送出)
             let vo = this
-            msg.pm.resolve()
-            vo.doSend()
+            vo.doSend({ pm: msg.pm })
         },
 
         //doSend: core 五段
-        doSend: function() {
+        doSend: function(opt = {}) {
             let vo = this
-
-            //防 Enter / 按鈕 並發重送
-            if (vo.sending) {
-                return
-            }
 
             let core = async () => {
 
@@ -383,7 +377,6 @@ export default {
                 }
 
                 //3) 確定打 API 才開 loading
-                vo.sending = true
                 vo.$ui.updateLoading(true)
 
                 //4) postMessage, 各自 catch + 旗標短路
@@ -412,16 +405,19 @@ export default {
                 return 'ok'
             }
 
-            core()
-                .catch((err) => {
-                    console.log('catch', err)
-                    vo.$ui.updateLoading(false)
-                    vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
-                })
-                .finally(() => {
-                    vo.sending = false
-                    vo.$ui.updateLoading(false)
-                })
+            //runSubmit: 送出流程(至失敗訊息框關閉)進行中再觸發即略過, 發送鈕之滑鼠 / 鍵盤 Enter 與輸入框 Enter 同一狀態(取代原 sending 旗標);
+            //opt.pm 為發送鈕之 promiseUnlock 鎖, 於請求結束(updateLoading(false))時釋放 (D16)
+            return vo.$ui.runSubmit('postMessage', () => {
+                return core()
+                    .catch((err) => {
+                        console.log('catch', err)
+                        vo.$ui.updateLoading(false)
+                        vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
+                    })
+                    .finally(() => {
+                        vo.$ui.updateLoading(false)
+                    })
+            }, opt)
 
         },
 

@@ -85,6 +85,7 @@
                         :iconColor="'#444'"
                         :iconColorHover="'#222'"
                         :shadow="false"
+                        :promiseUnlock="true"
                         @click="onClickDeleteBtn"
                     ></WButtonCircle>
 
@@ -100,10 +101,12 @@
                         :icon="mdiCloudUploadOutline"
                         :backgroundColor="'rgba(255,0,50,0.7)'"
                         :backgroundColorHover="'rgba(255,0,50,0.8)'"
+                        :backgroundColorFocus="'rgba(255,0,50,0.8)'"
                         :textColor="'#eee'"
                         :textColorHover="'#fff'"
                         :iconColor="'#eee'"
                         :iconColorHover="'#fff'"
+                        :iconColorFocus="'#fff'"
                         :shadow="false"
                         :promiseUnlock="true"
                         @click="onClickSaveBtn"
@@ -482,22 +485,36 @@ export default {
 
         },
 
-        onClickDeleteBtn: function() {
+        onClickDeleteBtn: function(msg) {
             // console.log('method onClickDeleteBtn')
+            //promiseUnlock 之鎖交由 deleteChannels 之 runSubmit 管理, 不於此解鎖 (D16; 原無 promiseUnlock, 亦無重入防護)
+            let vo = this
+            vo.deleteChannels({ pm: msg.pm })
+        },
+
+        deleteChannels: function(opt = {}) {
+            // console.log('method deleteChannels')
 
             let vo = this
 
-            //check
-            if (size(vo.itemsCheck) === 0) {
-                return
-            }
+            //runSubmit: 刪除流程(確認框至結果訊息框關閉)進行中再觸發即略過, 刪除鈕之滑鼠與鍵盤 Enter 同一狀態 (D16);
+            //unlockBtn 於開確認框前釋放按鈕鎖(確認框背後之按鈕不顯示載入圖示), 重入仍由流程狀態擋
+            return vo.$ui.runSubmit('deleteChannels', (unlockBtn) => {
 
-            //showCheckYesNo 確認
-            vo.$dg.showCheckYesNo(vo.$t('deleteChannelConfirm'))
-                .then(() => {
-                    vo.doDeleteChannels()
-                })
-                .catch(() => {})
+                //check
+                if (size(vo.itemsCheck) === 0) {
+                    return
+                }
+
+                //showCheckYesNo 確認: 是 → 刪除; 否(reject 'close') → 結束流程; 開框前釋放按鈕鎖
+                unlockBtn()
+                return vo.$dg.showCheckYesNo(vo.$t('deleteChannelConfirm'))
+                    .then(() => {
+                        return vo.doDeleteChannels()
+                    })
+                    .catch(() => {})
+
+            }, opt)
 
         },
 
@@ -567,7 +584,8 @@ export default {
                 return 'ok'
             }
 
-            core()
+            //回傳流程之 promise, 供 deleteChannels 之 runSubmit 於結果訊息框關閉後才結束占位 (D16)
+            return core()
                 .catch((err) => {
                     console.log('catch', err)
                     vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
@@ -580,18 +598,13 @@ export default {
 
         onClickSaveBtn: function(msg) {
             // console.log('method onClickSaveBtn')
-
+            //promiseUnlock 之鎖交由 doSaveChannels 之 runSubmit 於請求結束時釋放, 不於此解鎖: 請求期間儲存鈕之滑鼠與鍵盤 Enter 皆擋 (D16;
+            //原第一行即 pm.resolve, 鎖立即解除, 焦點留在儲存鈕時鍵盤連按可重複送出, 新增列會被建立 2 次)
             let vo = this
-
-            //第一行立刻釋放按鈕視覺鎖
-            msg.pm.resolve()
-
-            //fire-and-forget, 不 await
-            vo.doSaveChannels()
-
+            vo.doSaveChannels({ pm: msg.pm })
         },
 
-        doSaveChannels: function() {
+        doSaveChannels: function(opt = {}) {
             // console.log('method doSaveChannels')
 
             let vo = this
@@ -652,14 +665,17 @@ export default {
                 return 'ok'
             }
 
-            core()
-                .catch((err) => {
-                    console.log('catch', err)
-                    vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
-                })
-                .finally(() => {
-                    vo.$ui.updateLoading(false)
-                })
+            //runSubmit: 儲存流程(至結果訊息框關閉)進行中再觸發即略過; opt.pm 為儲存鈕之 promiseUnlock 鎖, 於請求結束(updateLoading(false))時釋放 (D16)
+            return vo.$ui.runSubmit('saveChannels', () => {
+                return core()
+                    .catch((err) => {
+                        console.log('catch', err)
+                        vo.$alert(vo.$t('anUnexpectedErrorOccurred'), { type: 'error' })
+                    })
+                    .finally(() => {
+                        vo.$ui.updateLoading(false)
+                    })
+            }, opt)
 
         },
 

@@ -59,6 +59,12 @@ export default {
 
             let vo = this
 
+            //單例: 新訊息取代開啟中之舊訊息時, 舊訊息之等待者視同已按確定(pm.resolve 對已結束者無作用);
+            //否則其流程永久等待, 送出流程之 runSubmit 占位不釋放而該操作無法再觸發 (D16)
+            if (vo.pm) {
+                vo.pm.resolve()
+            }
+
             //pm
             vo.pm = genPm()
 

@@ -1,7 +1,7 @@
 //api-files: 圖台(檔案) + 附件 + 統計 之 HTTP 契約測試 (需 backend, 不需 browser)
 //對應 spec 設計總覽 §10.3(圖台)/§10.5(getStats); 驗證 file id 機制 (附件存 id 非 base64) 與 agent 可查看檔案.
 import assert from 'assert'
-import { startServersOnce, apiBaseUrl } from './e2e-setup.mjs'
+import { startServersOnce, apiBaseUrl } from './tools/e2e-setup.mjs'
 
 const human = 'sys'
 const agent = 'agent-demo'

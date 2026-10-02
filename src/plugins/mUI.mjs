@@ -3,9 +3,14 @@ import get from 'lodash-es/get.js'
 import each from 'lodash-es/each.js'
 import isestr from 'wsemi/src/isestr.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
+import submitGuard from './submitGuard.mjs'
 
 
 let vo = Vue.prototype
+
+
+//sg, 送出類操作之前端雙擊防護 (見 submitGuard.mjs, spec D16)
+let sg = submitGuard()
 
 
 //連線建立前的 fallback 專用, 僅含連線狀態字串, 其餘語系皆由後端提供
@@ -45,6 +50,19 @@ function updateConnState(connState) {
 
 function updateLoading(loading) {
     vo.$store.commit(vo.$store.types.UpdateLoading, loading)
+
+    //全頁 loading 關閉(請求結束)時釋放送出中按鈕之 promiseUnlock 鎖, 結果訊息框出現時按鈕已恢復; 流程狀態仍在, 訊息框開啟期間之重入仍擋
+    if (!loading) {
+        sg.releaseBtnLocks()
+    }
+
+}
+
+
+//runSubmit: 有副作用之送出流程一律經此執行, 同 key 進行中再觸發即略過(按鈕、鍵盤 Enter、輸入框 Enter 同一狀態);
+//opt.pm 傳入按鈕之 promiseUnlock 鎖(msg.pm), 由本機制於請求結束時釋放, handler 不自行 resolve; opt.hold 見 submitGuard.mjs
+function runSubmit(key, fn, opt = {}) {
+    return sg.run(key, fn, opt)
 }
 
 
@@ -216,6 +234,7 @@ let mUI = {
 
     updateConnState,
     updateLoading,
+    runSubmit,
     updateUserToken,
     updateUserSelf,
     forceUpdate,

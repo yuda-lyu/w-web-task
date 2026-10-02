@@ -262,23 +262,31 @@ export default {
 
             vo.showMenu = false
 
-            //showCheckYesNo 確認 (沿用舊登出流程: 清前端登入態 → 轉址 SSO)
-            vo.$dg.showCheckYesNo(vo.$t('logoutConfirm'))
-                .then(() => {
+            //runSubmit: 登出流程(確認框至轉址)進行中再觸發即略過(觸發點為原生選單 div, 無 promiseUnlock, 不帶 pm);
+            //確認後轉址 / 重新載入(回 'redir')時保持占位至頁面離開, 選否即結束 (D16; 原無重入防護)
+            return vo.$ui.runSubmit('logout', (unlockBtn) => {
 
-                    localStorage.setItem('wtask:userToken', '')
-                    vo.$ui.updateUserToken('')
+                //showCheckYesNo 確認 (沿用舊登出流程: 清前端登入態 → 轉址 SSO); 開框前釋放按鈕鎖(與其他確認框流程同一寫法, 本入口無 pm 時為空操作)
+                unlockBtn()
+                return vo.$dg.showCheckYesNo(vo.$t('logoutConfirm'))
+                    .then(() => {
 
-                    let urlRedirect = get(window, '___pmwtask___.urlRedirect', '')
-                    if (isestr(urlRedirect)) {
-                        window.location.href = urlRedirect
-                    }
-                    else {
-                        window.location.reload()
-                    }
+                        localStorage.setItem('wtask:userToken', '')
+                        vo.$ui.updateUserToken('')
 
-                })
-                .catch(() => {})
+                        let urlRedirect = get(window, '___pmwtask___.urlRedirect', '')
+                        if (isestr(urlRedirect)) {
+                            window.location.href = urlRedirect
+                        }
+                        else {
+                            window.location.reload()
+                        }
+
+                        return 'redir'
+                    })
+                    .catch(() => {})
+
+            }, { hold: (r) => r === 'redir' })
 
         },
 
