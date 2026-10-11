@@ -1,20 +1,20 @@
 {
   "name": "w-web-task",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "main": "dist/w-web-task.umd.js",
   "dependencies": {
     "axios": "^1.18.1",
     "dompurify": "^3.4.12",
     "json5": "^2.2.3",
     "showdown": "^2.1.0",
-    "w-aggrid-vue": "^2.1.7",
-    "w-component-vue": "^2.5.27",
-    "w-data-collector": "^1.0.42",
-    "w-serv-hapi": "^1.1.4",
-    "w-serv-orm": "^1.1.5",
-    "w-syslog": "^1.0.31",
-    "w-ui-loginout": "^1.0.30",
-    "wsemi": "^1.9.11"
+    "w-aggrid-vue": "^2.1.8",
+    "w-component-vue": "^2.5.28",
+    "w-data-collector": "^1.0.43",
+    "w-serv-hapi": "^1.1.5",
+    "w-serv-orm": "^1.1.6",
+    "w-syslog": "^1.0.32",
+    "w-ui-loginout": "^1.0.31",
+    "wsemi": "^1.9.12"
   },
   "devDependencies": {
     "@vue/cli-plugin-babel": "^5.0.8",
@@ -29,10 +29,10 @@
     "eslint-plugin-vue": "^9.10.0",
     "vue": "^2.7.16",
     "vuex": "^3.6.2",
-    "w-orm-lmdb": "^1.0.36",
+    "w-orm-lmdb": "^1.0.37",
     "w-package-tools": "^1.1.16",
     "w-package-tools-e2e": "^1.0.6",
-    "w-screenctl": "^1.0.24"
+    "w-screenctl": "^1.0.25"
   },
   "scripts": {
     "serve": "vue-cli-service serve",
