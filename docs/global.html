@@ -29,7 +29,7 @@
 <nav >
     
     
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createAuthorizeExec">createAuthorizeExec</a></li><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
     
 </nav>
 
@@ -124,6 +124,244 @@
 
     
         <h3 class="subsection-title">Methods</h3>
+
+        
+            
+
+    
+
+    <h4 class="name" id="createAuthorizeExec"><span class="type-signature"></span>createAuthorizeExec<span class="signature">(opt)</span><span class="type-signature"> &rarr; {function}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>資料通道表操作之授權函數(交 w-serv-hapi / w-serv-webdata 之 opt.authorizeExec; spec D17 決策 2)</p>
+<p>w-serv-webdata 1.1.7 起 useDbOrm=true 時必填, 前端呼叫表操作(如同步之 channels.select)時於 operOrm 之前呼叫,
+回傳嚴格等於 true 才放行, 其他值一律回應 'permission denied' 且不呼叫 operOrm.
+本套件之資料通道只開放 methodsExec 所列方法(['select'], 供前端同步); 寫入一律經 kpFunExt(D16 lockSave、確保成員列 kmx、D7 游標身分皆在其內).
+放行: userId 為非空字串, 且 methodName 屬 methodsExec; 回傳一律為布林.
+拒絕: 回 false 並記 srLog.error({ event: 'authorizeExec', err, tableName, methodName }), userId 缺為 'errUserIdMissing', 方法不在清單為 'errUserNoPermission'.
+getUserIdByToken 已 fail-closed 且 w-serv-webdata 只綁定 methodsExec 之方法, 故兩個拒絕分支於正常呼叫不會發生, 屬縱深防護.</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="server_authorizeExec.mjs.html">server/authorizeExec.mjs</a>, <a href="server_authorizeExec.mjs.html#line22">line 22</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>opt</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入設定物件</p>
+                <h6>Properties</h6>
+                
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>methodsExec</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Array</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入允許之表操作方法陣列(須與交 w-serv-hapi 之 methodsExec 為同一陣列), 須為非空陣列</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>srLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入後端 log 物件, 須具 error 函數</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+            </td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳 ({ userId, tableName, methodName }) =&gt; Boolean</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">function</span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
 
         
             
@@ -1421,7 +1659,7 @@ opt.hold 為函數, 輸入流程結果, 回傳 true 時保持占位與按鈕鎖(
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Sun Oct 11 2026 16:44:52 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Wed Oct 14 2026 08:01:17 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>

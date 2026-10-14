@@ -11,9 +11,8 @@
 //訊息不可經 API 刪除（殘留於 demo 頻道, 同 api-agent; e2e 每案重建種子不受影響）。
 //跑法: npx mocha test/api-doubleclick.test.mjs --timeout 180000
 import assert from 'assert'
-import obj2u8arr from 'wsemi/src/obj2u8arr.mjs'
-import u8arr2obj from 'wsemi/src/u8arr2obj.mjs'
 import { startServersOnce, apiBaseUrl } from './tools/e2e-setup.mjs'
+import { postMain } from './tools/apiProbe.mjs'
 
 
 const TOKEN_HUMAN = 'sys' //id-for-admin
@@ -40,18 +39,12 @@ async function apiPost(path, token, body) {
 }
 
 
-//callRpc：直打前端資料通道之 kpFunExt（POST /api/main）, 封包格式對齊 w-converhp client（同 w-web-sso test/api-doubleclick 之 callRpc; 兩專案 w-converhp 2.1.3 / w-serv-webdata 1.1.3 同版）:
-//  request  body = obj2u8arr({ func, input: { __sysInputArgs__: [args...], __sysToken__: token } }), Authorization: Bearer <token>(本專案 verifyConn 會驗此權杖)
-//  response u8arr2obj → { success: { func, output: { state, msg } } } 或 { error: <msg> }
-//回傳 { state, msg }（與 HTTP REST 同形）; kpFunExt 之 reject key 即 msg
+//callRpc：直打前端資料通道之 kpFunExt（POST /api/main）; 封包格式之單一定義在 test/tools/apiProbe.mjs 之 postMain(w-converhp 2.1.9 / w-serv-webdata 1.1.12 實跑仍成立, 2026-10-14);
+//Authorization 與 __sysToken__ 皆為同一權杖(本專案 verifyConn 驗前者、getUserIdByToken 驗後者)
+//回傳 { state, msg }（與 HTTP REST 同形）; kpFunExt 之 reject key 即 msg; verifyConn 未通過等無 execute 輸出者 → { state:'error', msg:<error> }
 async function callRpc(func, args, token) {
-    const body = Buffer.from(obj2u8arr({ func, input: { __sysInputArgs__: args, __sysToken__: token } }))
-    const res = await fetch(`${apiBaseUrl}/api/main`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
-        body,
-    })
-    const o = u8arr2obj(new Uint8Array(await res.arrayBuffer()))
+    const r = await postMain(token, token, func, args)
+    const o = r.obj
     if (o && typeof o === 'object' && 'error' in o) {
         return { state: 'error', msg: String(o.error) }
     }
@@ -59,7 +52,7 @@ async function callRpc(func, args, token) {
     if (out && typeof out === 'object') {
         return { state: out.state, msg: out.msg }
     }
-    return { state: 'error', msg: `unparseable response: ${JSON.stringify(o)}` }
+    return { state: 'error', msg: `unparseable response: ${r.text}` }
 }
 
 

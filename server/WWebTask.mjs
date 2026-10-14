@@ -22,9 +22,11 @@ import fsIsFile from 'wsemi/src/fsIsFile.mjs'
 import replace from 'wsemi/src/replace.mjs'
 import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
+import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
 import procLang from './procLang.mjs'
 import procCore from './procCore.mjs'
 import createLockSave from './lockSave.mjs'
+import createAuthorizeExec from './authorizeExec.mjs'
 import srLogInit from './srLog.mjs'
 import { maskTok, maskQuery } from './maskLog.mjs'
 import { wrapInjected } from './wrapInjected.mjs'
@@ -39,11 +41,23 @@ import ds from '../src/schema/index.mjs'
  * @param {String} url 輸入資料庫連線字串，例如w-orm-lmdb為'./db'
  * @param {String} db 輸入資料庫名稱字串
  * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'
- * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false
- * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false
+ * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於登入檢查(/api/getUserByToken，from為'getUserByToken')與前端資料通道之每次請求(連線閘，from為w-converhp之apiType如'main')，兩者同一判定；拋錯或reject視同不允許
+ * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from，為API名稱)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於對外HTTP REST API(agent面)；拋錯或reject視同不允許
  * @param {Object} [opt={}] 輸入設定物件，預設{}
  * @param {Integer} [opt.serverPort=11008] 輸入伺服器通訊port，預設11008
- * @returns {Object} 回傳物件，其內server為hapi伺服器實體
+ * @param {String} [opt.subfolder=''] 輸入網站子目錄字串，例如'mtask'，預設''
+ * @param {String} [opt.urlRedirect=''] 輸入未登入時導向之網址字串(例如SSO登入頁)，預設''
+ * @param {String} [opt.showLanguage='y'] 輸入是否顯示語系選單字串，可選'y'、'n'，預設'y'
+ * @param {String} [opt.language='eng'] 輸入初始語系字串，可選'eng'、'cht'，預設'eng'
+ * @param {Object} [opt.webName={}] 輸入網站名稱物件，key為語系而值為字串，預設{}
+ * @param {Object} [opt.webDescription={}] 輸入網站說明物件，key為語系而值為字串，預設{}
+ * @param {String} [opt.webLogo=''] 輸入網站logo字串，預設''
+ * @param {Object} [opt.kpLangExt={}] 輸入擴充語系物件，預設{}
+ * @param {String} [opt.logFd='./logs'] 輸入後端log資料夾字串，相對路徑以建構時之工作目錄解析，資料夾不可建立時(例如上層為檔案)於建構時拋錯(w-syslog 1.0.33起；於資料庫建立之前)，預設'./logs'
+ * @param {String} [opt.logInterval='hr'] 輸入後端log分檔模式字串，可選'day'、'hr'，預設'hr'
+ * @param {Integer} [opt.archiveAfterDays=30] 輸入終態任務與舊訊息逾此天數搬至冷表之天數，小於等於0為停用，預設30
+ * 已移除之設定：useCheckUser、getUserById、useExcludeWhenNotAdmin(w-serv-orm已移除)，給予undefined、null、false以外之值即於建構時拋錯(於任何副作用之前)
+ * @returns {Object} 回傳w-serv-hapi之伺服器事件物件，可監聽error事件；w-serv-hapi 1.1.6起另帶ready與stop，惟stop只停止伺服器與其下游，不釋放本套件之計時器(封存掃描、雙擊防護占位)與資料庫連線，本套件以結束行程收尾
  */
 function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser, opt = {}) {
     let instWServHapiServer = null
@@ -91,24 +105,17 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     }
 
 
+    //checkOptRemoved: w-serv-orm 已移除之 useCheckUser / getUserById / useExcludeWhenNotAdmin(spec D17), 本套件不讀不轉交;
+    //給予 undefined / null / false 以外之值即同步拋 w-serv-orm 之原文訊息. 置於任何副作用(srLog 之 log 目錄、資料庫)之前; 規則與訊息由 w-serv-orm 單一擁有
+    checkOptRemoved(opt)
+
+
     //serverPort
     let serverPort = get(opt, 'serverPort')
     if (!ispint(serverPort)) {
         serverPort = 11008
     }
     serverPort = cint(serverPort)
-
-
-    //useCheckUser
-    let useCheckUser = get(opt, 'useCheckUser', false)
-
-
-    //getUserById
-    let getUserById = get(opt, 'getUserById', null)
-
-
-    //useExcludeWhenNotAdmin
-    let useExcludeWhenNotAdmin = get(opt, 'useExcludeWhenNotAdmin', false)
 
 
     //webName
@@ -153,14 +160,13 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let kpLang = procLang({ kpLangExt, webName, webDescription })
 
 
-    //srLog（後端 log；錯誤一律 log err-key 供識別）。須先於 WServOrm 建構：getUserById 於建構時即交給 WServOrm，其包裝要用 srLog
+    //srLog（後端 log；錯誤一律 log err-key 供識別）
     let srLog = srLogInit(opt)
 
     //注入函數一律經 wrapInjected 包裝後使用（W 契約，spec/設計要點與取捨.md D15）：
-    //部署方注入之 getUserByToken / verifyClientUser / verifyAppUser / getUserById 同步拋錯或 reject 時，視同否定結果（查無 → null、無權限 → false），
+    //部署方注入之 getUserByToken / verifyClientUser / verifyAppUser 同步拋錯或 reject 時，視同否定結果（查無 → null、無權限 → false），
     //走各呼叫點既有分支回自家 key；失敗原文（舊版 sso helper 為已代入權杖之完整網址）不上拋、不入 log，只記 describeUpstream 之 key 或型別。
     //以包裝版取代參數本身 → 其後所有呼叫點（含日後新增者）結構上只可能用到包裝版；包裝處記 warn（因），呼叫點記 error（果）。
-    //getUserById 選填（useCheckUser=true 時由 WServOrm 呼叫；原 reject 原文經 execute 之 pm2resolve 回前端），有給才包裝，查無由 WServOrm 既有分支拒絕。
     let onInjectFail = (name) => {
         return (d) => {
             srLog.warn({ event: `inject-${name}-fail`, ...d })
@@ -169,20 +175,12 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     getUserByToken = wrapInjected(getUserByToken, { failValue: null, onFail: onInjectFail('getUserByToken') })
     verifyClientUser = wrapInjected(verifyClientUser, { failValue: false, onFail: onInjectFail('verifyClientUser') })
     verifyAppUser = wrapInjected(verifyAppUser, { failValue: false, onFail: onInjectFail('verifyAppUser') })
-    if (isfun(getUserById)) {
-        getUserById = wrapInjected(getUserById, { failValue: null, onFail: onInjectFail('getUserById') })
-    }
 
 
     //WServOrm
-    let optWServOrm = {
-        useCheckUser,
-        getUserById,
-        useExcludeWhenNotAdmin,
-    }
     let wp = {}
     try {
-        wp = WServOrm(ds, WOrm, url, db, optWServOrm)
+        wp = WServOrm(ds, WOrm, url, db)
     }
     catch (err) {
         //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動
@@ -345,12 +343,21 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
     //p
     let p = {
-        checkToken: async(token) => {
+        //checkToken：資料通道之連線閘（verifyConn 用），回傳是否放行（spec D17 決策 3）。
+        //認證：getTokenUser，與 HTTP 路徑同一出口（S8）；失敗 reject 自家 key（w-converhp 回 permission denied、不寫 srLog，D15）。
+        //授權：已包裝之 verifyClientUser（拋錯或 reject 視同 false 並記 inject warn），與登入檢查 getAndVerifyClientUser 同一判定；from 為 w-converhp 之 apiType。
+        checkToken: async(token, from = '') => {
 
-            //getTokenUser：與 HTTP 路徑同一規則（S8），不另寫第二份
-            await getTokenUser(token)
+            //getTokenUser
+            let user = await getTokenUser(token)
 
-            return true
+            //verifyClientUser
+            let b = verifyClientUser(user, from)
+            if (ispm(b)) {
+                b = await b
+            }
+
+            return !!b
         },
     }
 
@@ -950,15 +957,16 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     ]
 
 
-    //tableNamesExec, tableNamesSync
-    //ORM 直通寫入僅開放純 CRUD 表 (channels/channelMembers); tasks/messages 之生命週期/原子寫入一律走 kpFunExt 業務函式
-    //(對應 spec 設計總覽 §6.2 註 與 設計要點與取捨 D2), 避免前端 ORM 直寫繞過 kmx + 狀態守衛 + 身分權威.
-    //tableNamesSync 須與 tableNamesExec 對齊: 同步引擎收到某表 tag 變更時會呼叫 kpExec[table].select() 去重抓,
-    //若把無 exec binding 的 messages/tasks 放進 sync, client refreshTable 找不到 kpExec[messages]/[tasks] →
-    //每次變更 emit error + 洩漏未解 promise + 該表 tag 永不更新. messages/tasks 前端一律走 $fapi getMessages/getTasks
-    //按需拉取 (非 ORM change 推送), 故不放進 sync.
+    //tableNamesExec, tableNamesSync, methodsExec
+    //資料通道之表操作只開 select, 供前端同步 channels/channelMembers (spec D17 決策 2); 寫入一律走 kpFunExt 業務函式
+    //(D16 lockSave、確保成員列 kmx、D7 游標身分皆在其內), 避免前端或直打 /api/main 之 ORM 直寫繞過之 (2026-10-14 前曾開 insert/save/del).
+    //tasks/messages 之生命週期/原子寫入亦一律走 kpFunExt (對應 spec 設計總覽 §6.2 註 與 設計要點與取捨 D2).
+    //tableNamesSync 須與 tableNamesExec 對齊且 methodsExec 須含 select: 同步引擎收到某表 tag 變更時會呼叫 kpExec[table].select() 去重抓
+    //(w-serv-webdata 1.1.12 於建構時檢核). messages/tasks 前端一律走 $fapi getMessages/getTasks 按需拉取 (非 ORM change 推送), 故不放進 sync.
+    //methodsExec 為單一定義: 同時交 w-serv-hapi 綁定與 authorizeExec 判斷
     let tableNamesExec = ['channels', 'channelMembers']
     let tableNamesSync = tableNamesExec
+    let methodsExec = ['select']
 
 
     //WServHapiServer
@@ -982,11 +990,17 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                 return false
             }
 
-            //checkToken：套件層連線閘僅做「token 認證」(解析 user + 驗欄位齊備). 授權屬套件使用者責任.
-            let b = await p.checkToken(token)
+            //checkToken：token 認證（解析 user + 驗欄位齊備; 失敗 reject 自家 key）+ 瀏覽使用者授權（部署方之 verifyClientUser, 與登入檢查同一強度; spec D17 決策 3）
+            let b = await p.checkToken(token, apiType)
 
-            srLog.info({ event: 'verifyConn', apiType }) //連線之 token 認證通過
-            return b
+            //check
+            if (!b) {
+                srLog.error({ event: 'verifyConn', err: 'errUserNoPermission', apiType }) //授權不通過須入 log 供稽核/統計; 只記 key 與 apiType, 不記權杖與使用者物件
+                return false
+            }
+
+            srLog.info({ event: 'verifyConn', apiType }) //連線之認證與授權通過
+            return true
         },
         getUserIdByToken: async (token) => { //可使用async或sync函數
             //fail-closed（S9，對齊 perm）：token 非字串或查無 userId（含上游失敗經 wrapInjected 視同查無）一律 reject，
@@ -1008,7 +1022,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         kpOrm: woItems,
         operOrm: procOrm, //procOrm的輸入為: userId, tableName, methodName, input
         tableNamesExec,
-        methodsExec: ['select', 'insert', 'save', 'del'], //mix需於procOrm內註冊以提供
+        methodsExec,
+        authorizeExec: createAuthorizeExec({ methodsExec, srLog }), //w-serv-webdata 1.1.7 起 useDbOrm=true 時必填; 只放行已識別使用者之 select, 拒絕記 srLog (spec D17)
         tableNamesSync,
         kpFunExt: { //接收參數第1個為userId, 之後才是前端給予參數 (皆經 wrapErrLog)
 

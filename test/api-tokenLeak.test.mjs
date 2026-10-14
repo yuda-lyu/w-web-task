@@ -1,5 +1,6 @@
 //api-tokenLeak：注入函數失敗時之權杖外洩與 fail-closed 契約測試（需 backend，不需 browser）。
-//對應 spec/設計要點與取捨.md D15（w-web-sso 權杖外洩修正方案 v2 之 W 契約、S7–S9、表 B task 列）。
+//對應 spec/設計要點與取捨.md D15（w-web-sso 權杖外洩修正方案 v2 之 W 契約、S7–S9、表 B task 列）;
+//E7 對應 D17 決策 3(資料通道連線閘套用 verifyClientUser 後, 其拋錯亦依 W 契約視同無權限且不外洩); E6 / S9 之 errUserIdMissing 對應 D15 行為變更之 2026-10-14 補記。
 //
 //測試權杖（srv.mjs 內定義, 受 NODE_ENV!=='production' 守門; harness 以 `node srv.mjs ./test/tools/e2e-settings.json` 啟動後端）：
 //  - '{token-for-reject}'：getUserByToken 以舊版 sso helper 形狀之字串 reject（夾合成秘密 SYNTH-SYS-SECRET-FOR-TEST 與本權杖）。
@@ -9,11 +10,8 @@
 //每案斷言兩個通道：C1 HTTP 回應（自家 key 且不含合成秘密/測試權杖）與 C2 本次後端之 srLog（本案新增之記錄逐筆比對且不含合成秘密/測試權杖）。
 //C3/C4（後端 stdout 與 error 事件）不經 harness 暴露, 由 unit-maskLog（陣列/遮罩）與 D15 之驗收探測覆蓋。
 import assert from 'assert'
-import fs from 'fs'
-import path from 'path'
-import obj2u8arr from 'wsemi/src/obj2u8arr.mjs'
-import u8arr2obj from 'wsemi/src/u8arr2obj.mjs'
-import { startServersOnce, apiBaseUrl, backendLogDir } from './tools/e2e-setup.mjs'
+import { startServersOnce, backendLogDir } from './tools/e2e-setup.mjs'
+import { httpGet, postMain, snapshotLogs, readNewText, proj, waitRecords } from './tools/apiProbe.mjs'
 
 
 const TK_REJECT = '{token-for-reject}'
@@ -24,77 +22,10 @@ const TK_ADMIN = 'sys'
 //禁出現字串：合成秘密與測試權杖本體（不含大括號之片段同時涵蓋原樣與 URL 編碼 %7B...%7D 兩種形式）
 const FORBIDDEN = ['SYNTH-SYS-SECRET-FOR-TEST', 'SYNTH-VERIFY-SECRET-FOR-TEST', 'token-for-reject', 'token-for-verify-throw']
 
-//本次後端之 srLog 目錄：harness 以測試實例目錄為工作目錄、以 test/tools/e2e-settings.json 啟動後端, srv.mjs 以該設定檔之 logFd 傳入 WWebTask 之 srLog；
-//目錄由 harness 匯出（與開發用之 ./logs 分離）
+//本次後端之 srLog 目錄:harness 以測試實例目錄為工作目錄、以 test/tools/e2e-settings.json 啟動後端, srv.mjs 以該設定檔之 logFd 傳入 WWebTask 之 srLog;
+//目錄由 harness 匯出(與開發用之 ./logs 分離). srLog 之快照與逐筆讀取、HTTP / 資料通道之請求輔助皆在 test/tools/apiProbe.mjs(單一定義處)
 const logDir = backendLogDir
 
-
-// ── srLog 讀取：以「各 log 檔當下位元組數」為快照, 只讀快照之後新增之內容（本案之記錄）─────────
-function snapshotLogs() {
-    let snap = {}
-    if (fs.existsSync(logDir)) {
-        for (let fn of fs.readdirSync(logDir)) {
-            if (fn.endsWith('.log')) {
-                snap[fn] = fs.statSync(path.join(logDir, fn)).size
-            }
-        }
-    }
-    return snap
-}
-
-function readNewText(snap) {
-    let out = ''
-    if (!fs.existsSync(logDir)) {
-        return out
-    }
-    for (let fn of fs.readdirSync(logDir).sort()) { //檔名為 YYYY-MM-DDTHH.log, 字典序即時間序（跨小時亦正確）
-        if (!fn.endsWith('.log')) {
-            continue
-        }
-        let buf = fs.readFileSync(path.join(logDir, fn))
-        let from = snap[fn] || 0
-        if (buf.length > from) {
-            out += buf.subarray(from).toString('utf8')
-        }
-    }
-    return out
-}
-
-function parseRecords(text) {
-    return text.split(/\r?\n/).filter((l) => l.trim() !== '').map((l) => {
-        try {
-            return JSON.parse(l)
-        }
-        catch (err) {
-            return { _raw: l }
-        }
-    })
-}
-
-//proj：記錄之比對投影（level + event + 語意欄位; 略去 time/pid/hostname 等環境欄位）
-function proj(r) {
-    let o = { level: r.level, event: r.event }
-    for (let k of ['err', 'upstream', 'upstreamType', 'upstreamName', '_raw']) {
-        if (k in r) {
-            o[k] = r[k]
-        }
-    }
-    return o
-}
-
-//waitRecords：pino 經 worker thread 非同步落檔, 輪詢至新增記錄數達 n（或逾時）後再多等一小段收齊尾端記錄
-async function waitRecords(snap, n, timeoutMs = 8000) {
-    let t0 = Date.now()
-    while (Date.now() - t0 < timeoutMs) {
-        if (parseRecords(readNewText(snap)).length >= n) {
-            break
-        }
-        await new Promise((resolve) => setTimeout(resolve, 200))
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    let text = readNewText(snap)
-    return { text, recs: parseRecords(text) }
-}
 
 function assertNoForbidden(text, where) {
     for (let s of FORBIDDEN) {
@@ -102,32 +33,6 @@ function assertNoForbidden(text, where) {
     }
 }
 
-
-// ── HTTP helper ───────────────────────────────────────────────────────────────
-async function httpGet(pathQs) {
-    let res = await fetch(`${apiBaseUrl}${pathQs}`)
-    let text = await res.text()
-    let body = null
-    try {
-        body = JSON.parse(text)
-    }
-    catch (err) {}
-    return { status: res.status, text, body }
-}
-
-//資料通道 /api/main（w-converhp 封包）：Authorization 走 verifyConn; 本體 __sysToken__ 走 getUserIdByToken
-async function postMain(authToken, sysToken, func = 'getWebInfor') {
-    let payload = { func, input: { __sysInputArgs__: [], __sysToken__: sysToken } }
-    let res = await fetch(`${apiBaseUrl}/api/main`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/octet-stream' },
-        body: Buffer.from(obj2u8arr(payload)),
-    })
-    let u8a = new Uint8Array(await res.arrayBuffer())
-    let text = Buffer.from(u8a).toString('utf8')
-    let obj = u8arr2obj(u8a)
-    return { status: res.status, text, obj }
-}
 
 const qs = (tk) => encodeURIComponent(tk)
 
@@ -258,6 +163,8 @@ describe('api-tokenLeak（注入函數失敗不外洩上游原文; getUserIdByTo
         let out = r.obj && r.obj.success && r.obj.success.output
         assert.ok(out, `應有 execute 回應, 實得 ${r.text}`)
         assert.strictEqual(out.state, 'error', `__sysToken__ 上游失敗時不得執行函數, 實得 ${r.text}`)
+        //D15 行為變更之 2026-10-14 補記: w-serv-webdata 1.1.12 起 getUserIdByToken 之拒絕值原樣為 msg, 前端收自家 key
+        assert.strictEqual(out.msg, 'errUserIdMissing', `回應之 msg 應為自家 key, 實得 ${r.text}`)
         assertNoForbidden(r.text, '資料通道回應')
         let { text, recs } = await waitRecords(snap, 3)
         assertNoForbidden(text, 'srLog')
@@ -275,11 +182,13 @@ describe('api-tokenLeak（注入函數失敗不外洩上游原文; getUserIdByTo
         let outNotFound = rNotFound.obj && rNotFound.obj.success && rNotFound.obj.success.output
         assert.ok(outNotFound, `應有 execute 回應, 實得 ${rNotFound.text}`)
         assert.strictEqual(outNotFound.state, 'error', `__sysToken__ 查無時不得執行函數, 實得 ${rNotFound.text}`)
+        assert.strictEqual(outNotFound.msg, 'errUserIdMissing', `查無之 msg 應為自家 key(D15 補記), 實得 ${rNotFound.text}`)
 
         let rEmpty = await postMain(TK_ADMIN, '')
         let outEmpty = rEmpty.obj && rEmpty.obj.success && rEmpty.obj.success.output
         assert.ok(outEmpty, `應有 execute 回應, 實得 ${rEmpty.text}`)
         assert.strictEqual(outEmpty.state, 'error', `__sysToken__ 為空字串時不得執行函數, 實得 ${rEmpty.text}`)
+        assert.strictEqual(outEmpty.msg, 'errUserIdMissing', `空字串之 msg 應為自家 key(D15 補記), 實得 ${rEmpty.text}`)
 
         //對照組：有效權杖照常執行（fail-closed 不誤擋）
         let rOk = await postMain(TK_ADMIN, TK_ADMIN)
@@ -295,6 +204,22 @@ describe('api-tokenLeak（注入函數失敗不外洩上游原文; getUserIdByTo
             { level: 50, event: 'getUserIdByToken', err: 'errUserIdMissing' },
             { level: 30, event: 'verifyConn' },
             { level: 30, event: 'kpfun-getWebInfor' },
+        ])
+    })
+
+
+    it('E7 資料通道：Authorization 為 {token-for-verify-throw}（連線閘之 verifyClientUser 拋錯）→ permission denied; srLog 記 inject warn + verifyConn errUserNoPermission 且不含合成秘密', async function() {
+        //D17 決策 3: 連線閘於 getTokenUser 之後呼叫已包裝之 verifyClientUser; 拋錯經 wrapInjected 視同 false(W 契約), 不通過回 false 並記 srLog
+        let snap = snapshotLogs()
+        let r = await postMain(TK_VERIFY_THROW, TK_VERIFY_THROW)
+        assert.strictEqual(r.status, 200)
+        assert.strictEqual(r.obj && r.obj.error, 'permission denied', `verifyClientUser 拋錯時連線閘應拒絕, 實得 ${r.text}`)
+        assertNoForbidden(r.text, '資料通道回應')
+        let { text, recs } = await waitRecords(snap, 2)
+        assertNoForbidden(text, 'srLog')
+        assert.deepStrictEqual(recs.map(proj), [
+            { level: 40, event: 'inject-verifyClientUser-fail', upstreamType: 'error', upstreamName: 'Error' },
+            { level: 50, event: 'verifyConn', err: 'errUserNoPermission' },
         ])
     })
 

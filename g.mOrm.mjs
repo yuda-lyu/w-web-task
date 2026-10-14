@@ -11,13 +11,8 @@ let st = getSettings()
 let url = st.dbUrl
 let db = st.dbName
 
-//WServOrm
-let opt = {
-    getUserById: null,
-    useCheckUser: false,
-    useExcludeWhenNotAdmin: false,
-}
-let r = WServOrm(ds, WOrm, url, db, opt)
+//WServOrm(w-serv-orm 已移除之 useCheckUser / getUserById / useExcludeWhenNotAdmin 不再傳入, spec D17)
+let r = WServOrm(ds, WOrm, url, db)
 let { woItems, procOrm } = r
 
 

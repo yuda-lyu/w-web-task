@@ -23,10 +23,6 @@ let ssoAppToken = st.ssoAppToken
 let ssoLoginUrl = st.ssoLoginUrl
 let opt = {
 
-    useCheckUser: false,
-    getUserById: null,
-    useExcludeWhenNotAdmin: false,
-
     serverPort: get(stApp, 'serverPort', 11008),
     subfolder: '', //mtask
     urlRedirect: ssoLoginUrl, //未登入時導向SSO登入頁, 本機測試時得先編譯, 再瀏覽: http://localhost:11008/
@@ -82,6 +78,11 @@ let getUserByToken = async (token) => {
     if (token === '{token-for-verify-throw}' && process.env.NODE_ENV !== 'production') {
         return { id: 'id-for-verify-throw', name: 'verify-throw', email: 'verify-throw@example.com', isAdmin: 'y' }
     }
+    //'{token-for-nonadmin}' 為測試用權杖 (test/api-dataChannel), 同樣受 NODE_ENV 守門: 解析為有效但非系統管理者之使用者 (isAdmin='n'),
+    //下方 verifyClientUser 拒絕之, 供驗證資料通道之連線閘與登入檢查同一授權強度 (spec D17).
+    if (token === '{token-for-nonadmin}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-nonadmin', name: 'nonadmin', email: 'nonadmin@example.com', isAdmin: 'n' }
+    }
     //未設定 SSO app token 時(本機開發未接SSO), 不打SSO直接拒絕
     if (!ssoAppToken) {
         console.log('ssoAppToken 未設定, 略過 SSO 驗證')
@@ -108,8 +109,9 @@ let getUserByToken = async (token) => {
 }
 
 let verifyClientUser = (user, from) => {
-    console.log('verifyClientUser/user', user)
-    console.log('於生產環境時得加入限制瀏覽器使用者身份機制')
+    //不於每次呼叫印出使用者物件: 登入檢查與資料通道之連線閘(前端每 2 秒輪詢)皆經此函數 (spec D17; 同 w-web-perm srv.mjs)
+    // console.log('verifyClientUser/user', user)
+    //於生產環境時得加入限制瀏覽器使用者身份機制 (from 為 'getUserByToken' 或資料通道之 apiType, 如 'main')
     //測試用 (受 NODE_ENV 守門): 合成使用者 id-for-verify-throw (見 getUserByToken 之 '{token-for-verify-throw}') 一律拋出夾合成秘密之 Error
     if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
         throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
@@ -119,8 +121,9 @@ let verifyClientUser = (user, from) => {
 }
 
 let verifyAppUser = (user, from) => {
-    console.log('verifyAppUser/user', user)
-    console.log('於生產環境時得加入限制應用程式使用者身份機制')
+    //不於每次呼叫印出使用者物件: agent 之每次 HTTP REST 請求皆經此函數 (與 verifyClientUser 對稱; 同 w-web-perm srv.mjs)
+    // console.log('verifyAppUser/user', user)
+    //於生產環境時得加入限制應用程式使用者身份機制
     //測試用 (受 NODE_ENV 守門): 合成使用者 id-for-verify-throw (見 getUserByToken 之 '{token-for-verify-throw}') 一律拋出夾合成秘密之 Error
     if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
         throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
