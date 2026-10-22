@@ -38,6 +38,23 @@ async function postMain(authToken, sysToken, func = 'getWebInfor', args = []) {
 }
 
 
+//callRpc: 直打前端資料通道之 kpFunExt(POST /api/main); Authorization 與 __sysToken__ 皆為同一權杖(本專案 verifyConn 驗前者、getUserIdByToken 驗後者)
+//回傳 { state, msg }(與 HTTP REST 同形); kpFunExt 之 reject key 即 msg; verifyConn 未通過等無 execute 輸出者 → { state:'error', msg:<error> }
+//(api-doubleclick / api-concurrency 共用; 原定義於 api-doubleclick, 2026-10-23 收斂至此)
+async function callRpc(func, args, token) {
+    const r = await postMain(token, token, func, args)
+    const o = r.obj
+    if (o && typeof o === 'object' && 'error' in o) {
+        return { state: 'error', msg: String(o.error) }
+    }
+    const out = o && o.success && o.success.output
+    if (out && typeof out === 'object') {
+        return { state: out.state, msg: out.msg }
+    }
+    return { state: 'error', msg: `unparseable response: ${r.text}` }
+}
+
+
 //outputOf: postMain 結果之 execute 輸出({ state, msg }); verifyConn 未通過等無 execute 輸出者回 null
 function outputOf(r) {
     let out = r && r.obj && r.obj.success && r.obj.success.output
@@ -120,6 +137,7 @@ async function waitRecords(snap, n, timeoutMs = 8000, logDir = backendLogDir) {
 export {
     httpGet,
     postMain,
+    callRpc,
     outputOf,
     snapshotLogs,
     readNewText,

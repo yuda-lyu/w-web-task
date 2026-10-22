@@ -316,6 +316,53 @@ let kpLang = {
         cht: '上一則訊息仍在送出中，請勿重複送出',
     },
 
+    //多人同時編輯 (原則 10; 規格 dspec/多人同時編輯之寫入契約.md): w-serv-orm 拒收鍵 baselineMismatch / rowNotFound / baselineFormat / rowsInvalid 轉本套件語系鍵,
+    //前三者皆為「畫面資料過期」(提示重新載入, 草稿保留), rowsInvalid 為伺服端資料異常 (記 log, 重新載入無解)
+    saveStale: { //baselineMismatch: 載入後他人已新增 / 修改 / 刪除 / 重排 (先動先贏, 整次拒收零寫入)
+        eng: 'The data has been updated by someone else. Nothing was saved. Please reload and try again.',
+        cht: '資料已被他人更新，本次未儲存任何變更，請重新載入後再操作',
+    },
+    errRowNotFound: { //rowNotFound: 欲修改 / 刪除之列已不存在 (含不帶基準之呼叫)
+        eng: 'The data no longer exists (it may have been deleted). Please reload.',
+        cht: '找不到資料（可能已被刪除），請重新載入',
+    },
+    errBaselineFormat: { //baselineFormat: 基準格式或版本不識 (不降級為不帶基準)
+        eng: 'The data version is not recognized. Please reload.',
+        cht: '資料版本無法辨識，請重新載入',
+    },
+    errRowsInvalid: { //rowsInvalid: 庫內列主鍵重複或缺漏 (伺服端資料錯誤)
+        eng: 'The stored data is inconsistent. Please contact the administrator.',
+        cht: '資料庫內資料異常，請洽管理員',
+    },
+    saveRolledBack: { //寫入中途硬失敗 (非競爭), 已依前像還原
+        eng: 'Saving failed and all changes were rolled back. Nothing was changed.',
+        cht: '儲存失敗，已還原，未做任何變更',
+    },
+    saveWriteFail: { //寫入中途硬失敗且補償亦失敗: 部分資料可能已寫入
+        eng: 'Saving failed and part of the data may have been written. Please reload to check, or contact the administrator.',
+        cht: '儲存失敗，部分資料可能已寫入，請重新載入確認或洽管理員',
+    },
+    errChannelNameInvalid: { //頻道名稱必填 (所有入口一致, 原則 4)
+        eng: 'Channel name is required',
+        cht: '頻道名稱必填',
+    },
+    errChannelNameDuplicate: { //頻道名稱不可重複 (所有入口一致, 原則 4)
+        eng: 'Channel name must be unique',
+        cht: '頻道名稱不可重複',
+    },
+    errChannelNotFound: { //對已刪 / 不存在之頻道操作 (發訊、已讀、成員存檔; 原則 6)
+        eng: 'Can not find the channel',
+        cht: '查無頻道',
+    },
+    errMemberChannelMismatch: { //成員清單之列 channelId 與參數不符
+        eng: 'The member does not belong to this channel',
+        cht: '成員不屬於此頻道',
+    },
+    errMemberDuplicate: { //同一頻道內成員不可重複 ((channelId, memberId) 唯一; 以寫入後之結果判定)
+        eng: 'A member can only appear once in a channel',
+        cht: '同一頻道內成員不可重複',
+    },
+
     //=== UI 文字鍵 (前端頁面用) ===
 
     //頻道頁
@@ -624,6 +671,32 @@ let kpLang = {
     deleteChannelConfirm: {
         eng: 'Are you sure you want to delete the selected channels?',
         cht: '確定要刪除所選頻道嗎？',
+    },
+
+    //後台清單頁之草稿保護 (多人同時編輯, 原則 10; 頻道頁、成員頁共用)
+    draftStaleNotice: {
+        eng: 'This data has been updated by someone else. Your unsaved edits are kept, but saving will be rejected. Please reload to get the latest data.',
+        cht: '資料已被他人更新。未儲存的修改仍保留，但存檔將被拒絕，請重新載入取得最新資料。',
+    },
+    reloadData: {
+        eng: 'Reload',
+        cht: '重新載入',
+    },
+    reloadDiscardConfirm: {
+        eng: 'Reloading will discard your unsaved edits. Continue?',
+        cht: '重新載入將捨棄未儲存的修改，是否繼續？',
+    },
+    switchChannelDiscardConfirm: { //成員頁: 有未儲存修改時切換頻道之確認
+        eng: 'Switching channel will discard your unsaved edits. Continue?',
+        cht: '切換頻道將捨棄未儲存的修改，是否繼續？',
+    },
+    memberDuplicate: { //成員頁: 同一頻道內成員重複之儲存格警告 (tooltip)
+        eng: 'This member is duplicated in the channel',
+        cht: '此成員於頻道內重複',
+    },
+    memberInvalid: {
+        eng: 'Please correct the duplicated members first',
+        cht: '請先修正重複的成員',
     },
 
     //對話頁

@@ -90,7 +90,29 @@ node g.initialData.mjs        # 初始化 DB (種子: demo 頻道)
 | GET | /api/getStats | 系統統計 (頻道/訊息/任務各狀態計數) | token |
 | GET | /api/getUserByToken | (w-ui-loginout 用) token→user | token |
 
-對內前端 (kpFunExt WebSocket RPC) 另有 getWebInfor / getChannelsList / saveChannel / deleteChannel / getChannelMembers / saveChannelMember / deleteChannelMember / getMessages / postMessage / getTasks / getTask / claimTask / respondTask / resetTask / ackChannel / uploadFile / getFileInfo / getStats — 與對外面共用同一 procCore 業務邏輯 (getFile 走 HTTP 二進位).
+對內前端 (kpFunExt WebSocket RPC) 另有 getWebInfor / getChannelsList / saveChannels / deleteChannels / saveChannel / deleteChannel / getChannelMembers / saveChannelMembers / deleteChannelMembers / saveChannelMember / deleteChannelMember / getMessages / postMessage / getTasks / getTask / claimTask / respondTask / resetTask / ackChannel / uploadFile / getFileInfo / getStats — 與對外面共用同一 procCore 業務邏輯 (getFile 走 HTTP 二進位).
+
+### 多人同時編輯 (後台頻道 / 成員清單頁)
+
+多位管理員可同時開著後台「頻道管理」「成員」頁編輯 (規格: opensrcOper `dspec/多人同時編輯之寫入契約.md`; 設計 `spec/設計要點與取捨.md` D18). 規則:
+
+- **拿舊畫面存檔 → 整次拒收、零寫入**: 後台頁以**清單級 API** 存檔 / 刪除 — `saveChannels(rows, { baseline })`、`deleteChannels(ids, { baseline })`、`saveChannelMembers(channelId, rows, { baseline })`、`deleteChannelMembers(channelId, ids, { baseline })` — 並帶「載入時畫面所見之列」之基準 (`w-serv-orm/src/baseline.mjs` 之 `buildBaseline`, 契約見 `src/schema/contracts/`; 頻道為整表、成員為該頻道). 後端於表鎖內新鮮讀取比對, 載入後若他人新增 / 修改 / 刪除任一列即拒收 (`saveStale`, 先動先贏). 回傳 `{ inserted, modified, deleted, unchanged, rows }`, 其中 `rows` 為寫入後之伺服端列, 前端以之取新基準.
+- **不帶基準者 (外部呼叫, 如持管理者權杖直打資料通道) 後者蓋前者**, 但修改只改不增 (列已被刪 → `errRowNotFound`, 不復活)、刪除未命中 → `errRowNotFound`; 不帶基準之清單存檔無刪除集合 (只動送出之列). 單筆 API (`saveChannel` / `deleteChannel` / `saveChannelMember` / `deleteChannelMember`) 保留供外部呼叫, 屬不帶基準之寫入; 前端不再呼叫.
+- **草稿保護**: 有未存修改時收到推播不重建編輯中之內容並顯示「資料已被他人更新」提示條 (內容全同之推播不誤報); 存檔被拒草稿保留, 提示條提供「重新載入」(確認後捨棄草稿).
+- **伺服器專有欄位** (`userId / timeCreate / userIdUpdate / timeUpdate / isActive / order`, 成員之 `lastSeenMessageId`) 不採用客戶端值; agent 已讀游標只由 `ackChannel` 更新, 後台成員存檔不會回寫舊游標.
+- **資料規則於後端強制**: 頻道名稱必填且不重複、同一頻道內 `(channelId, memberId)` 不重複 (以寫入後之結果判定, 可於同一次存檔刪掉既有重複列; 既有重複於成員頁以警告圖示提示); 成員清單每列 `channelId` 須等於參數.
+- **寫入中途硬失敗** (非競爭, 如磁碟滿) 依前像補償還原: 成功還原回 `saveRolledBack` (未做任何變更)、補償亦失敗回 `saveWriteFail` (部分資料可能已寫入, 已記 log).
+- **刪頻道**: 成員列連帶刪除; `postMessage` / `ackChannel` / 成員存檔對已刪或不存在之頻道回 `errChannelNotFound`. 該頻道之訊息與任務維持現行 (不刪、不搬; 待使用者裁示).
+- 部署前提: 單一行程、同表只由同一 WServOrm 實例寫入 (比對之讀取不經 ORM 快取).
+
+#### Upgrade Notes (多人同時編輯, 2026-10-23)
+
+- **相依**: 需 `w-serv-orm` ≥ 1.1.17 (`withTabLocks` / `guardWrite` / `src/baseline.mjs`); `package.json` 已改為 `^1.1.17`.
+- **自行建構 `procCore` 者**: deps 須新增 `withTabLocks`、`guardWrite` (取自 `WServOrm(...)` 之回傳); 缺則建構即拋 `invalid deps of procCore`. 使用 `WWebTask(...)` 入口者無須動作.
+- **行為變更 (API 呼叫端)**: ①修改不存在之列回 `errRowNotFound` (原會新增); ②刪除不存在之列回 `errRowNotFound` (原回成功); ③頻道名稱空或重複、成員 `(channelId, memberId)` 重複於後端被拒 (`errChannelNameInvalid` / `errChannelNameDuplicate` / `errMemberDuplicate`; 原只前端擋或不擋) —— **若既有資料已有重複, 後台存檔會被擋至使用者修正 (刪除重複列)**; ④客戶端夾帶之 `userId / timeCreate / isActive / order / lastSeenMessageId` 不再寫入; ⑤`postMessage` / `ackChannel` 對已刪或不存在之頻道回 `errChannelNotFound` (原會寫入); ⑥刪頻道連帶刪成員列 (單筆 `saveChannel` / `saveChannelMember` / `deleteChannel` / `deleteChannelMember` 成功時之回傳形狀維持原 ORM 結果, 外部呼叫端不受影響; 新增清單 API 回 `{ inserted, modified, deleted, unchanged, rows }`).
+- **前端**: 後台頻道頁 / 成員頁改用清單級 API 並帶基準; 自行以 `$fapi.saveChannel` 等逐列呼叫之客製頁面仍可用 (單筆 API 保留), 但不享有基準保護. 成員頁於有未儲存修改時切換頻道會先確認 (取消則維持原頻道與草稿).
+- **語系鍵**: `server/procLang.mjs` 新增 `saveStale / errRowNotFound / errBaselineFormat / errRowsInvalid / saveRolledBack / saveWriteFail / errChannelNameInvalid / errChannelNameDuplicate / errChannelNotFound / errMemberChannelMismatch / errMemberDuplicate / draftStaleNotice / reloadData / reloadDiscardConfirm / switchChannelDiscardConfirm / memberDuplicate / memberInvalid` (eng + cht); 自訂 `kpLang` 覆寫者請補.
+- **稽核既有資料之重複** (升版後後台存檔被 `errChannelNameDuplicate` / `errMemberDuplicate` 擋下時): 頻道名稱重複以 `getChannelsList` 依 `name` 分組; 成員重複以 `getChannelMembers(channelId)` 依 `memberId` 分組, 於後台成員頁 (重複儲存格有警告圖示) 刪除多餘列.
 
 ### agent 處理訊息附件 (圖片/檔案)
 訊息的 `attachments` 為 file id 陣列 (非 base64, 省 token). agent 看到附件時: `GET /api/getFileInfo?token=&id=<fileId>` 取原始檔名/type/size → `GET /api/getFile?token=&id=<fileId>` 取實際 bytes 檢視. 自己要發帶圖訊息: 先 `POST /api/uploadFile` 取 file id, 再 `postMessage(..., attachments:[id])`.

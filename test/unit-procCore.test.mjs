@@ -7,81 +7,12 @@ import cacheSt from 'wsemi/src/cacheSt.mjs'
 import procCore from '../server/procCore.mjs'
 import createLockSave from '../server/lockSave.mjs'
 import ds from '../src/schema/index.mjs'
+import { makeTable, makeSlowTable, mkLocks } from './tools/memTables.mjs'
 
 
 // ── in-memory woItems mock ────────────────────────────────────────────────────
-//每張表一個 Map<id,row>。select/insert/save/del/delAll 語意對齊 lmdb WServOrm。
-function makeTable() {
-    const map = new Map()
-    return {
-        //select: 回全表列，過濾 q 中各 key 等值條件，依 id 字典序排序（模擬 lmdb getRange 時序）。
-        async select(q) {
-            let rows = Array.from(map.values())
-            if (q && typeof q === 'object') {
-                for (const [k, v] of Object.entries(q)) {
-                    rows = rows.filter((r) => r[k] === v)
-                }
-            }
-            rows = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-            return rows
-        },
-        //insert: rows 陣列（或單筆物件），重複 id 略過。
-        async insert(rows) {
-            const arr = Array.isArray(rows) ? rows : [rows]
-            for (const row of arr) {
-                if (!map.has(row.id)) { map.set(row.id, { ...row }) }
-            }
-        },
-        //save: rows 陣列（或單筆物件），merge 到既有列（空字串覆寫，對齊 lodash merge 對 '' 之行為）。
-        async save(rows) {
-            const arr = Array.isArray(rows) ? rows : [rows]
-            for (const row of arr) {
-                const existing = map.get(row.id) || {}
-                map.set(row.id, { ...existing, ...row })
-            }
-        },
-        //del: 刪 q.id，回 [{nDeleted:1}]。
-        async del(q) {
-            map.delete(q.id)
-            return [{ nDeleted: 1 }]
-        },
-        //delAll: 清表。
-        async delAll() {
-            map.clear()
-        },
-        //取得整個 map（測試用）
-        _map: map,
-    }
-}
-
-//makeSlowTable：同 makeTable，但 select / insert / save / del 先讓出 ms 毫秒再執行 —— 使並行呼叫之「先 select 後 insert」競態窗必定重疊
-//（未以 kmx 包成原子者即重複建列）。供「雙擊防護 / 並行 (D16)」用；其餘案例仍用即時之 makeTable。
-function makeSlowTable(ms = 5) {
-    const t = makeTable()
-    const wait = () => new Promise((resolve) => setTimeout(resolve, ms))
-    return {
-        async select(q) {
-            await wait()
-            return t.select(q)
-        },
-        async insert(rows) {
-            await wait()
-            return t.insert(rows)
-        },
-        async save(rows) {
-            await wait()
-            return t.save(rows)
-        },
-        async del(q) {
-            await wait()
-            return t.del(q)
-        },
-        async delAll() {
-            return t.delAll()
-        },
-        _map: t._map,
-    }
-}
+//每張表一個 Map<id,row>。select/insert/save/del/delAll 語意對齊 lmdb WServOrm (save / del 回逐筆結果、save 支援 autoInsert:false);
+//makeTable / makeSlowTable / mkLocks 定義於 test/tools/memTables.mjs (多人同時編輯, 原則 10: 表鎖 withTabLocks / guardWrite 為 w-serv-orm 真實實作)。
 
 //woItems mock
 const woItems = {
@@ -105,7 +36,7 @@ const cst = cacheSt()
 const lockSave = createLockSave(cst)
 
 //procCore 實體
-const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx, lockSave })
+const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx, lockSave, ...mkLocks(woItems) })
 
 
 // ── 工具函式 ─────────────────────────────────────────────────────────────────
@@ -706,7 +637,7 @@ describe('unit-procCore', function() {
                 tasksArchive: makeSlowTable(),
             }
             cstC = cacheSt()
-            pcC = procCore({ woItems: wo, procOrm: null, ds, srLog, kmx: pmKeyMutex(), lockSave: createLockSave(cstC) })
+            pcC = procCore({ woItems: wo, procOrm: null, ds, srLog, kmx: pmKeyMutex(), lockSave: createLockSave(cstC), ...mkLocks(wo) })
             //既有頻道 CH（無主責 agent）
             const ch = ds.channels.funNew({ name: 'DC Channel', ownerId: USER_HUMAN, userId: USER_HUMAN })
             ch.id = CH
@@ -772,8 +703,9 @@ describe('unit-procCore', function() {
             assert.strictEqual(ms[0].memberType, 'agent')
         })
 
-        it('saveChannel 設 agentId 與該 agent 之 ackChannel 並行 → 成員列只 1 列且游標保留(兩路徑共用同一 kmx key)', async function() {
-            //對應 D7「saveChannel 確保 agent member 列; ackChannel 對缺列者 upsert」同一 (channelId, memberId) 列 + D16
+        it('saveChannel 設 agentId 與該 agent 之 ackChannel 並行 → 成員列只 1 列且游標保留(兩路徑以表鎖互斥: ack 缺列路徑取表鎖後重查)', async function() {
+            //對應 D7「saveChannel 確保 agent member 列; ackChannel 對缺列者 upsert」同一 (channelId, memberId) 列 + D16;
+            //2026-10-23 多人同時編輯: 原共用 kmx key `channelMember:<c>:<m>`, 改為 saveChannel 於表鎖內補建、ack 缺列路徑取表鎖並鎖內重查 (rulebook_concurrency R-CONC-04)
             const rs = await settle([
                 pcC.saveChannel(USER_HUMAN, { id: CH, agentId: 'agent-dc' }),
                 pcC.ackChannel('agent-dc', CH, 'msg-dc-1'),

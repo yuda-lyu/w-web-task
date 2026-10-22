@@ -12,7 +12,7 @@
 //跑法: npx mocha test/api-doubleclick.test.mjs --timeout 180000
 import assert from 'assert'
 import { startServersOnce, apiBaseUrl } from './tools/e2e-setup.mjs'
-import { postMain } from './tools/apiProbe.mjs'
+import { callRpc } from './tools/apiProbe.mjs'
 
 
 const TOKEN_HUMAN = 'sys' //id-for-admin
@@ -39,21 +39,7 @@ async function apiPost(path, token, body) {
 }
 
 
-//callRpc：直打前端資料通道之 kpFunExt（POST /api/main）; 封包格式之單一定義在 test/tools/apiProbe.mjs 之 postMain(w-converhp 2.1.9 / w-serv-webdata 1.1.12 實跑仍成立, 2026-10-14);
-//Authorization 與 __sysToken__ 皆為同一權杖(本專案 verifyConn 驗前者、getUserIdByToken 驗後者)
-//回傳 { state, msg }（與 HTTP REST 同形）; kpFunExt 之 reject key 即 msg; verifyConn 未通過等無 execute 輸出者 → { state:'error', msg:<error> }
-async function callRpc(func, args, token) {
-    const r = await postMain(token, token, func, args)
-    const o = r.obj
-    if (o && typeof o === 'object' && 'error' in o) {
-        return { state: 'error', msg: String(o.error) }
-    }
-    const out = o && o.success && o.success.output
-    if (out && typeof out === 'object') {
-        return { state: out.state, msg: out.msg }
-    }
-    return { state: 'error', msg: `unparseable response: ${r.text}` }
-}
+//callRpc 之單一定義在 test/tools/apiProbe.mjs（封包格式同處; 與 api-concurrency 共用）
 
 
 //assertRejectsOnly：拒絕者之 msg 只能是 key（與時序無關: 兩次重疊則第 2 次被拒, 未重疊則皆成功）

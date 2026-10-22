@@ -288,6 +288,80 @@ async function editRoleCell(page, rowIndex, value) {
     await page.waitForTimeout(400)
 }
 
+//=== E2E-014 / E2E-015（多人同時編輯: 後台清單頁之草稿保護與舊畫面存檔被拒）用之 helper ===
+
+//取後台 grid 中「colId 欄文字等於 text」之列 row-index（name / memberId 欄為 pinned-left, 與 center 容器同 row-index）。
+async function rowIndexByText(page, colId, text) {
+    let rid = await page.evaluate(({ c, t }) => {
+        let cells = [...document.querySelectorAll(`.ag-root-wrapper [col-id="${c}"]`)].filter((e) => e.closest('.ag-row'))
+        let hit = cells.find((e) => (e.innerText || '').trim() === t)
+        return hit ? hit.closest('.ag-row').getAttribute('row-index') : null
+    }, { c: colId, t: text })
+    if (rid === null) { throw new Error(`rowIndexByText 找不到 ${colId}=「${text}」之列`) }
+    return rid
+}
+
+//Pattern B：就地編輯後台 grid 指定 row 之 colId 儲存格（同 editRoleCell, 範圍為整頁 grid 而非成員視窗）。
+async function editGridCell(page, rowIndex, colId, value) {
+    let cell = page.locator(`.ag-center-cols-container .ag-row[row-index="${rowIndex}"] [col-id="${colId}"]`).first()
+    await cell.scrollIntoViewIfNeeded()
+    await cell.dblclick()
+    await page.waitForTimeout(900) //editor mount settle
+    let editor = page.locator('.ag-cell-inline-editing input:not(.ag-checkbox-input)').first()
+    await editor.waitFor({ state: 'visible', timeout: 5000 })
+    let cur = await editor.inputValue().catch(() => '')
+    if (cur) { await page.keyboard.press('End'); for (let k = 0; k < cur.length + 2; k++) { await page.keyboard.press('Backspace') } }
+    await page.keyboard.insertText(value)
+    await page.waitForTimeout(200)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(400)
+}
+
+//讀後台 grid 指定 row 之 colId 儲存格 rendered innerText。
+async function gridCellText(page, rowIndex, colId) {
+    return await page.evaluate(({ r, c }) => {
+        let e = document.querySelector(`.ag-center-cols-container .ag-row[row-index="${r}"] [col-id="${c}"]`)
+        return e ? (e.innerText || '').trim() : null
+    }, { r: rowIndex, c: colId })
+}
+
+//選擇後台成員頁頻道選擇器（WTextSelect）之頻道（頻道名為資料文字, 不隨語系）: 點觸發區（`div[_tabindex="0"]`, 容器橫跨整列, 點容器中心會落在空白處）展開下拉
+//→ 清單為 teleport 至 body 之浮層（.WPopperFix, position:fixed）, 項目為 `div[tabindex="0"]` → 點清單項（作法同姊妹專案 w-web-perm 之 setDialogModeWithShots）。
+async function selectMembersChannel(page, name) {
+    await page.locator('[data-fmid="members-channel-selector"] div[_tabindex="0"]').first().click()
+    let item = page.locator('.WPopperFix div[tabindex="0"]').filter({ hasText: new RegExp(`^\\s*${name}\\s*$`) }).first()
+    await item.waitFor({ state: 'visible', timeout: 10000 })
+    await page.waitForTimeout(400)
+    await item.click()
+    await item.waitFor({ state: 'hidden', timeout: 10000 })
+    await page.waitForTimeout(800)
+}
+
+//另一位管理員之寫入（arrange, 未走 UI）: 以頁面既有連線呼叫後端業務函式（不帶基準之外部呼叫）; 寫入前開啟測試實例之固定時鐘使 timeUpdate 確定, 寫入後關閉。
+async function otherAdminCall(page, fnName, args) {
+    setFakeNow()
+    try {
+        return await page.evaluate(async ({ f, a }) => { return await window.$vo.$fapi[f](...a) }, { f: fnName, a: args })
+    }
+    finally {
+        clearFakeNow()
+    }
+}
+
+//等「資料已被他人更新」提示條出現, 並回其文字
+async function waitStaleNotice(page) {
+    await waitUntilExist(page, '草稿保護提示條出現', () => !!document.querySelector('[data-fmid="draft-stale-notice"]'), { timeout: 25000 })
+    await page.waitForTimeout(500)
+    return await page.evaluate(() => document.querySelector('[data-fmid="draft-stale-notice"]').innerText || '')
+}
+
+//點「儲存」後等被拒之訊息框（內含 expectText）出現, 回其面板 locator
+async function waitRejectDialog(page, expectText) {
+    await waitUntilExist(page, '存檔被拒訊息框出現', (t) => (document.body.innerText || '').includes(t), { timeout: 15000, arg: expectText })
+    await page.waitForTimeout(400)
+    return page.locator(SEL_DIALOG_PANEL).filter({ hasText: expectText }).last()
+}
+
 //case 定義：run(page,lang) 走流程並回傳截圖 buffer（或多階段 [{name,buf}]）；semantic(page,lang) 於產製端與比對端皆在寫檔／比對前執行（runCase）。
 //stages＝該案產出之圖鍵（多數單張, 圖鍵＝案例鍵; E2E-002/004/005 兩階段; E2E-007 三階段）; 陣列順序＝mocha it 順序＝產製順序。
 const CASES = [
@@ -875,6 +949,255 @@ const CASES = [
             let hotTxt = await page.evaluate(() => { let e = document.querySelector('.ag-root-wrapper'); return e ? (e.innerText || '') : '' })
             assert.ok(hotTxt.includes('Summarize quarterly report') && hotTxt.includes('Draft the release notes') && hotTxt.includes('Fetch external metrics'), '切回熱表應恢復三筆種子任務標題')
             assert.ok(!hotTxt.includes('Archived quarterly summary'), '切回熱表不應含封存任務')
+        },
+    },
+    {
+        //E2E-014：後台頻道頁切編輯模式並就地改了「訂單服務」描述（尚未儲存）, 此時另一位管理員改了別的頻道 → 畫面不丟草稿並出現「資料已被他人更新」提示;
+        //按儲存被整次拒收（本次未儲存任何變更）, 草稿仍保留; 按提示條「重新載入」並確認後換成最新資料、草稿捨棄。
+        //6 步真實 user path：①rail 點 Admin（預設頻道子頁）②點編輯模式開關 ③就地編輯「訂單服務」描述欄（Pattern B, 產生草稿）
+        //  ④另一位管理員改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條 ⑥點儲存→被拒訊息框→確定 ⑦點重新載入→確認→最新資料。
+        //修前（E7）: 步驟④推播即把整張表重建, 草稿靜默消失而儲存鈕仍亮; 本案例於步驟⑤驗草稿仍在。
+        //清理：寫入皆在測試實例資料庫, 由 per-case reseed 還原; 固定時鐘於 arrange 後立即關閉。
+        name: 'E2E-014-channels-draft-stale',
+        stages: ['E2E-014-1-draft-stale', 'E2E-014-2-click-save', 'E2E-014-3-save-rejected', 'E2E-014-4-reloaded'],
+        run: async (page, lang) => {
+            let ok = await page.evaluate(() => window.$vo.$t('ok'))
+            let yes = await page.evaluate(() => window.$vo.$t('yes'))
+            let tStaleNotice = await page.evaluate(() => window.$vo.$t('draftStaleNotice'))
+            let tSaveStale = await page.evaluate(() => window.$vo.$t('saveStale'))
+            let draft = `draft-desc-${lang}`
+            let otherDesc = `edited-by-other-admin-${lang}`
+
+            //進後台頻道子頁（rail 點 Admin; 首步「點後台」共用 E2E-005-1-click-admin）→ 等頻道 grid 載入
+            await clickRail(page, 'admin')
+            await waitUntilExist(page, '後台頻道 grid 載入', () => (((document.querySelector('.ag-root-wrapper') || {}).innerText) || '').includes('訂單服務'), { timeout: 20000 })
+            await page.waitForTimeout(500)
+            let before = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+
+            //act：切編輯模式 → 就地編輯「訂單服務」描述欄（草稿）
+            await page.locator('[data-fmid="channels-edit-switch"]').first().click()
+            await page.waitForTimeout(700)
+            let riDemo = await rowIndexByText(page, 'name', CH_DEMO_NAME)
+            await editGridCell(page, riDemo, 'description', draft)
+            await waitUntilExist(page, '草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="channels-save-btn"]'), { timeout: 8000 })
+            assert.strictEqual(await gridCellText(page, riDemo, 'description'), draft, '前置: 草稿已在格內')
+
+            //arrange（未走 UI）：另一位管理員改「報表產製」描述 → 資料通道推播整張 channels 表
+            await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherDesc }]])
+            let noticeTxt = await waitStaleNotice(page)
+
+            //spec E2E-014 驗證(1)：推播後草稿仍在格內、儲存鈕仍在、他人之變更不覆蓋草稿畫面; (2) 提示條文字
+            assert.strictEqual(await gridCellText(page, riDemo, 'description'), draft, '有未存修改時推播不得重建編輯中之內容 (E7)')
+            assert.ok(await page.locator('[data-fmid="channels-save-btn"]').count() > 0, '草稿仍在: 儲存鈕應仍顯示')
+            assert.ok(noticeTxt.includes(tStaleNotice), `提示條應含「${tStaleNotice}」, 實得「${noticeTxt}」`)
+            let riReport = await rowIndexByText(page, 'name', '報表產製')
+            assert.notStrictEqual(await gridCellText(page, riReport, 'description'), otherDesc, '草稿期間畫面不顯示他人之新值 (不重建)')
+            //視覺①：提示條整顆（草稿保留 + 他人已更新）
+            let s1 = await captureStableWithBox(page, '[data-fmid="draft-stale-notice"]')
+
+            //act：點儲存（視覺②點擊前: 框儲存鈕整顆）→ 整次被拒
+            let s2 = await captureStableWithBox(page, '[data-fmid="channels-save-btn"]')
+            await page.locator('[data-fmid="channels-save-btn"]').first().click()
+            let dlg = await waitRejectDialog(page, tSaveStale)
+            //視覺③：被拒訊息框整個面板
+            let s3 = await captureStableWithBox(page, dlg)
+            await clickConfirmBtn(page, ok)
+
+            //spec E2E-014 驗證(3)：被拒後零寫入（後端「訂單服務」描述未變）、草稿與提示條保留
+            let after = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+            let dBefore = before.find((c) => c.id === CH_DEMO_ID).description
+            let dAfter = after.find((c) => c.id === CH_DEMO_ID).description
+            assert.strictEqual(dAfter, dBefore, '被拒後「訂單服務」描述不得被寫入')
+            assert.strictEqual(await gridCellText(page, riDemo, 'description'), draft, '被拒後草稿仍保留')
+            assert.ok(await page.locator('[data-fmid="draft-stale-notice"]').count() > 0, '被拒後提示條仍在')
+
+            //act：點「重新載入」→ 確認 → 換成最新資料
+            await page.locator('[data-fmid="draft-reload-btn"]').first().click()
+            await clickConfirmBtn(page, yes)
+            await waitUntilExist(page, '重新載入後見他人之新值', (d) => (((document.querySelector('.ag-root-wrapper') || {}).innerText) || '').includes(d), { timeout: 15000, arg: otherDesc })
+            await waitUntilExist(page, '提示條與儲存鈕消失', () => !document.querySelector('[data-fmid="draft-stale-notice"]') && !document.querySelector('[data-fmid="channels-save-btn"]'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            //視覺④：重新載入後的資料表（標頭與四頻道列; 草稿已捨棄、他人之新值已顯示）
+            let s4 = await captureStableWithBox(page, gridContentBox(SEL_GRID))
+
+            //spec E2E-014 驗證(4)：草稿已捨棄
+            let riDemo2 = await rowIndexByText(page, 'name', CH_DEMO_NAME)
+            assert.strictEqual(await gridCellText(page, riDemo2, 'description'), dBefore || '', '重新載入後草稿應被捨棄, 回到後端值')
+
+            //延伸驗證（外審補驗; 不增標準圖）：重新載入後之新基準取自伺服端 —— 再改一次描述並儲存須成功（基準不是推播時之草稿摘要, 也不是舊基準）
+            let afterDesc = `after-reload-${lang}`
+            await editGridCell(page, riDemo2, 'description', afterDesc)
+            await waitUntilExist(page, '重新載入後再編輯: 儲存鈕出現', () => !!document.querySelector('[data-fmid="channels-save-btn"]'), { timeout: 8000 })
+            await page.locator('[data-fmid="channels-save-btn"]').first().click()
+            await waitUntilExist(page, '儲存成功訊息框', (t) => (document.body.innerText || '').includes(t), { timeout: 15000, arg: await page.evaluate(() => window.$vo.$t('saveChannelSuccess')) })
+            await clickConfirmBtn(page, ok)
+            let saved = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+            assert.strictEqual(saved.find((c) => c.id === CH_DEMO_ID).description, afterDesc, '重新載入後以新基準存檔應成功')
+            assert.ok(!(await page.locator('[data-fmid="channels-save-btn"]').count()), '存檔成功後儲存鈕消失')
+            return [
+                { name: 'E2E-014-1-draft-stale', buf: s1 },
+                { name: 'E2E-014-2-click-save', buf: s2 },
+                { name: 'E2E-014-3-save-rejected', buf: s3 },
+                { name: 'E2E-014-4-reloaded', buf: s4 },
+            ]
+        },
+        semantic: async (page) => {
+            //spec E2E-014 驗證(5)：他人之寫入已生效（後端「報表產製」描述為他人所寫）、本人未存之草稿未寫入
+            let rs = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+            let report = rs.find((c) => c.id === 'id-for-channel-report')
+            assert.ok(/^edited-by-other-admin-/.test(report.description), `他人之寫入應生效, 實得「${report.description}」`)
+            let demo = rs.find((c) => c.id === CH_DEMO_ID)
+            assert.ok(!/^draft-desc-/.test(demo.description || ''), '本人未存之草稿不得寫入')
+        },
+    },
+    {
+        //E2E-015：後台成員頁（預設頻道「訂單服務」）切編輯模式並就地改了 agent-demo 的角色（尚未儲存）, 此時另一位管理員為同頻道新增了成員 → 出現「資料已被他人更新」提示且草稿保留;
+        //按儲存被整次拒收（本次未儲存任何變更, 他人新增之成員不受影響）, 按「重新載入」並確認後顯示含他人新增之最新成員清單。
+        //6 步真實 user path：①rail 點 Admin→子選單「成員」②點編輯模式開關 ③就地編輯 agent-demo 之角色欄（Pattern B）
+        //  ④另一位管理員新增成員（arrange, 未走 UI: saveChannelMembers 不帶基準之外部呼叫）⑤見提示條（成員頁以 store.channelMembers 推播比對基準）⑥點儲存→被拒→確定 ⑦點重新載入→確認→最新清單。
+        //清理：同 E2E-014。
+        name: 'E2E-015-members-stale-save',
+        stages: ['E2E-015-1-draft-stale', 'E2E-015-2-click-save', 'E2E-015-3-save-rejected', 'E2E-015-4-reloaded'],
+        run: async (page, lang) => {
+            let ok = await page.evaluate(() => window.$vo.$t('ok'))
+            let yes = await page.evaluate(() => window.$vo.$t('yes'))
+            let tStaleNotice = await page.evaluate(() => window.$vo.$t('draftStaleNotice'))
+            let tSaveStale = await page.evaluate(() => window.$vo.$t('saveStale'))
+            let draftRole = `draft-role-${lang}`
+            let otherMember = `added-by-other-${lang}`
+
+            //進後台成員子頁（首步「點後台」共用 E2E-005-1-click-admin）
+            await clickRail(page, 'admin')
+            await waitUntilExist(page, '後台成員子頁鈕就緒', () => !!document.querySelector('[data-fmid="admin-sub-mmMembers"]'), { timeout: 20000 })
+            await page.locator('[data-fmid="admin-sub-mmMembers"]').first().click()
+            await waitUntilExist(page, '後台成員 grid 載入 agent-demo', () => (document.body.innerText || '').includes('agent-demo'), { timeout: 20000 })
+            await page.waitForTimeout(500)
+            let before = await page.evaluate(async (cid) => { let r = await window.$vo.$fapi.getChannelMembers(cid); return r.map((m) => ({ id: m.id, memberId: m.memberId, role: m.role })) }, CH_DEMO_ID)
+
+            //act：切編輯模式 → 就地編輯 agent-demo 之角色欄（草稿）
+            await page.locator('[data-fmid="members-edit-switch"]').first().click()
+            await page.waitForTimeout(700)
+            let riAgent = await rowIndexByText(page, 'memberId', 'agent-demo')
+            await editGridCell(page, riAgent, 'role', draftRole)
+            await waitUntilExist(page, '草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            assert.strictEqual(await gridCellText(page, riAgent, 'role'), draftRole, '前置: 草稿已在格內')
+
+            //arrange（未走 UI）：另一位管理員為同頻道新增成員 → 資料通道推播 channelMembers 表
+            await otherAdminCall(page, 'saveChannelMembers', [CH_DEMO_ID, [{ memberId: otherMember, memberType: 'human', role: 'member' }]])
+            let noticeTxt = await waitStaleNotice(page)
+
+            //spec E2E-015 驗證(1)(2)：草稿仍在、儲存鈕仍在、提示條文字; 他人新增之成員尚未出現於畫面（不重建）
+            assert.strictEqual(await gridCellText(page, riAgent, 'role'), draftRole, '有未存修改時畫面不得被重建')
+            assert.ok(await page.locator('[data-fmid="members-save-btn"]').count() > 0, '草稿仍在: 儲存鈕應仍顯示')
+            assert.ok(noticeTxt.includes(tStaleNotice), `提示條應含「${tStaleNotice}」, 實得「${noticeTxt}」`)
+            assert.ok(!(await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes(otherMember), '草稿期間畫面不顯示他人新增之成員')
+            let s1 = await captureStableWithBox(page, '[data-fmid="draft-stale-notice"]')
+
+            //act：點儲存 → 整次被拒
+            let s2 = await captureStableWithBox(page, '[data-fmid="members-save-btn"]')
+            await page.locator('[data-fmid="members-save-btn"]').first().click()
+            let dlg = await waitRejectDialog(page, tSaveStale)
+            let s3 = await captureStableWithBox(page, dlg)
+            await clickConfirmBtn(page, ok)
+
+            //spec E2E-015 驗證(3)：被拒後零寫入——agent-demo 角色未變, 他人新增之成員仍在、未被覆蓋; 草稿與提示條保留
+            let after = await page.evaluate(async (cid) => { let r = await window.$vo.$fapi.getChannelMembers(cid); return r.map((m) => ({ id: m.id, memberId: m.memberId, role: m.role })) }, CH_DEMO_ID)
+            let rBefore = before.find((m) => m.memberId === 'agent-demo').role
+            assert.strictEqual(after.find((m) => m.memberId === 'agent-demo').role, rBefore, '被拒後 agent-demo 角色不得被寫入')
+            assert.ok(after.some((m) => m.memberId === otherMember), '他人新增之成員不受影響')
+            assert.strictEqual(after.length, before.length + 1)
+            assert.strictEqual(await gridCellText(page, riAgent, 'role'), draftRole, '被拒後草稿仍保留')
+            assert.ok(await page.locator('[data-fmid="draft-stale-notice"]').count() > 0, '被拒後提示條仍在')
+
+            //act：點「重新載入」→ 確認 → 最新清單
+            await page.locator('[data-fmid="draft-reload-btn"]').first().click()
+            await clickConfirmBtn(page, yes)
+            await waitUntilExist(page, '重新載入後見他人新增之成員', (m) => (document.body.innerText || '').includes(m), { timeout: 15000, arg: otherMember })
+            await waitUntilExist(page, '提示條與儲存鈕消失', () => !document.querySelector('[data-fmid="draft-stale-notice"]') && !document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            let s4 = await captureStableWithBox(page, gridContentBox(SEL_GRID))
+
+            //spec E2E-015 驗證(4)：草稿已捨棄（agent-demo 角色回後端值）
+            let riAgent2 = await rowIndexByText(page, 'memberId', 'agent-demo')
+            assert.strictEqual(await gridCellText(page, riAgent2, 'role'), rBefore, '重新載入後草稿應被捨棄')
+
+            //=== 延伸驗證（外審補驗; 不增標準圖）===
+            //(a) 有未存修改時切換頻道須確認 (P5): 取消 → 原頻道與草稿維持; 選到同一頻道 → 無確認、草稿維持; 確定 → 換頻道並捨棄草稿
+            let no = await page.evaluate(() => window.$vo.$t('no'))
+            let tSwitch = await page.evaluate(() => window.$vo.$t('switchChannelDiscardConfirm'))
+            let otherCh = '報表產製'
+            await editGridCell(page, riAgent2, 'role', 'p5-draft')
+            await waitUntilExist(page, 'P5 草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            await selectMembersChannel(page, otherCh)
+            await waitUntilExist(page, 'P5 切換頻道確認框出現', (t) => (document.body.innerText || '').includes(t), { timeout: 8000, arg: tSwitch })
+            await clickConfirmBtn(page, no) //取消
+            assert.ok((await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes('agent-demo'), 'P5: 取消後仍在原頻道')
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role'), 'p5-draft', 'P5: 取消後草稿維持')
+            assert.ok(await page.locator('[data-fmid="members-save-btn"]').count() > 0, 'P5: 取消後儲存鈕仍在')
+            assert.ok((await page.evaluate(() => document.querySelector('[data-fmid="members-channel-selector"]').innerText)).includes(CH_DEMO_NAME), 'P5: 取消後選擇器回到原頻道')
+            await selectMembersChannel(page, CH_DEMO_NAME) //選到同一頻道
+            assert.ok(!(await page.evaluate((t) => (document.body.innerText || '').includes(t), tSwitch)), 'P5: 選到同一頻道不應出現確認框')
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role'), 'p5-draft', 'P5: 選到同一頻道草稿維持')
+            await selectMembersChannel(page, otherCh)
+            await waitUntilExist(page, 'P5 切換頻道確認框再出現', (t) => (document.body.innerText || '').includes(t), { timeout: 8000, arg: tSwitch })
+            await clickConfirmBtn(page, yes) //確定
+            await waitUntilExist(page, 'P5 已換頻道且草稿捨棄', () => { let g = document.querySelector('.ag-root-wrapper'); return (!g || !(g.innerText || '').includes('agent-demo')) && !document.querySelector('[data-fmid="members-save-btn"]') }, { timeout: 10000 })
+            let rolesAfterSwitch = await page.evaluate(async (cid) => (await window.$vo.$fapi.getChannelMembers(cid)).map((m) => m.role), CH_DEMO_ID)
+            assert.ok(!rolesAfterSwitch.includes('p5-draft'), 'P5: 捨棄之草稿不得寫入')
+
+            //(b) 草稿中刪除其他列後改回原值再切換編輯模式, 已刪之列不得復活 (舊快照重建 → 存檔時被當新列新增)
+            await selectMembersChannel(page, CH_DEMO_NAME)
+            await waitUntilExist(page, '回原頻道見 agent-demo', () => { let g = document.querySelector('.ag-root-wrapper'); return !!g && (g.innerText || '').includes('agent-demo') }, { timeout: 15000 })
+            await otherAdminCall(page, 'saveChannelMembers', [CH_DEMO_ID, [{ memberId: 'victim-b', memberType: 'human', role: 'member' }]])
+            await selectMembersChannel(page, otherCh) //無草稿: 直接切換 (重新載入成員清單的使用者動作)
+            await waitUntilExist(page, '已換頻道', () => { let g = document.querySelector('.ag-root-wrapper'); return !g || !(g.innerText || '').includes('agent-demo') }, { timeout: 10000 })
+            await selectMembersChannel(page, CH_DEMO_NAME)
+            await waitUntilExist(page, '重載後見 victim-b', () => (document.querySelector('.ag-root-wrapper') ? (document.querySelector('.ag-root-wrapper').innerText || '') : '').includes('victim-b'), { timeout: 15000 })
+            await page.waitForTimeout(500)
+            let origRole = await gridCellText(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role')
+            await editGridCell(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role', 'tmp-role')
+            await waitUntilExist(page, '(b) 草稿成立', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            let riVictim = await rowIndexByText(page, 'memberId', 'victim-b')
+            await page.locator(`.ag-row[row-index="${riVictim}"] .ag-selection-checkbox`).first().click()
+            await waitUntilExist(page, '(b) 刪除鈕出現', () => !!document.querySelector('[data-fmid="members-delete-btn"]'), { timeout: 8000 })
+            await page.locator('[data-fmid="members-delete-btn"]').first().click()
+            await clickConfirmBtn(page, yes)
+            await clickConfirmBtn(page, ok)
+            let membersNow = await page.evaluate(async (cid) => (await window.$vo.$fapi.getChannelMembers(cid)).map((m) => m.memberId), CH_DEMO_ID)
+            assert.ok(!membersNow.includes('victim-b'), '(b) 後端已刪 victim-b')
+            assert.ok(!(await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes('victim-b'), '(b) 畫面已移除 victim-b')
+            assert.ok(await page.locator('[data-fmid="members-save-btn"]').count() > 0, '(b) 刪除不丟草稿: 儲存鈕仍在')
+            await editGridCell(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role', origRole) //改回原值 → 無修改
+            await waitUntilExist(page, '(b) 改回原值後儲存鈕消失', () => !document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            await page.locator('[data-fmid="members-edit-switch"]').first().click() //關
+            await page.waitForTimeout(800)
+            await page.locator('[data-fmid="members-edit-switch"]').first().click() //開: 自快照重建
+            await page.waitForTimeout(900)
+            assert.ok(!(await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes('victim-b'), '(b) 切換編輯模式後已刪之列不得復活')
+            assert.ok(!(await page.locator('[data-fmid="members-save-btn"]').count()), '(b) 無修改: 儲存鈕不應出現')
+
+            //(c) 草稿中刪除後之基準仍有效: 再改一次角色並儲存須成功（基準為載入時凍結基準去掉被刪之列; 新基準取自伺服端）
+            let afterRole = `after-reload-role-${lang}`
+            await editGridCell(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role', afterRole)
+            await waitUntilExist(page, '(c) 草稿成立', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            await page.locator('[data-fmid="members-save-btn"]').first().click()
+            await waitUntilExist(page, '(c) 儲存成功訊息框', (t) => (document.body.innerText || '').includes(t), { timeout: 15000, arg: await page.evaluate(() => window.$vo.$t('saveMemberSuccess')) })
+            await clickConfirmBtn(page, ok)
+            let rolesSaved = await page.evaluate(async (cid) => (await window.$vo.$fapi.getChannelMembers(cid)).map((m) => ({ memberId: m.memberId, role: m.role })), CH_DEMO_ID)
+            assert.strictEqual(rolesSaved.find((m) => m.memberId === 'agent-demo').role, afterRole, '(c) 以新基準存檔應成功')
+            assert.ok(!rolesSaved.some((m) => m.memberId === 'victim-b'), '(c) 已刪之 victim-b 不得因存檔被當新列新增')
+            return [
+                { name: 'E2E-015-1-draft-stale', buf: s1 },
+                { name: 'E2E-015-2-click-save', buf: s2 },
+                { name: 'E2E-015-3-save-rejected', buf: s3 },
+                { name: 'E2E-015-4-reloaded', buf: s4 },
+            ]
+        },
+        semantic: async (page) => {
+            //spec E2E-015 驗證(5)：後端終態——兩位成員（agent-demo 角色為原值、他人新增者）, 本人未存之草稿角色未寫入
+            let rs = await page.evaluate(async (cid) => { let r = await window.$vo.$fapi.getChannelMembers(cid); return r.map((m) => ({ memberId: m.memberId, role: m.role })) }, CH_DEMO_ID)
+            assert.strictEqual(rs.length, 2)
+            assert.ok(rs.every((m) => !/^draft-role-/.test(m.role || '')), '本人未存之草稿不得寫入')
         },
     },
 ]
