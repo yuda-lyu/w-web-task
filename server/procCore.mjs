@@ -140,6 +140,107 @@ function procCore(deps = {}) {
     }
 
 
+    //opMoveTask: 刪頻道時將該頻道之一筆任務 (任何狀態) 移入冷表 tasksArchive (D12 之封存表; 格式與熱表完全相同, 原列整份複製).
+    //於 task:<id> 實體鎖內重讀再搬 (鎖序: 表鎖 → 實體鎖; 與 claimTask / respondTask / resetTask / archiveSweep 互斥): 搬走後它們於鎖內重讀得 errTaskNotFound, 不會回寫已離開熱表之列.
+    //列已不在熱表 (已被封存掃描搬走) → 略過. 先 upsert 冷表、再刪熱表 (冷表 save 為 upsert, 重跑冪等).
+    //補償 (亦於同一把 task:<id> 鎖內, 與搬移對稱): 熱表補回前像 (鎖內重讀所得, 已存在則略過); 刪冷表複本——僅當冷表於搬移前原無該 id 之列 (中斷後重試遇「冷熱並存」之殘留者不刪原有冷表列, 以免補償使其遺失;
+    //該殘留列之內容已被熱表前像覆寫, 為中斷之中間態). 補償置於鎖內: 否則封存掃描可於「熱表補回後、冷表複本刪除前」取鎖搬走該任務, 其後補償刪掉冷表複本, 任務兩表皆無.
+    //stat.tasks 累計實際搬移筆數 (供 log)
+    let opMoveTask = (taskId, stat) => {
+        let cur = null
+        let archExisted = false
+        return {
+            redo: async () => {
+                await kmx('task:' + taskId, async () => {
+                    let rs = await woItems.tasks.select({ id: taskId })
+                    if (!iseobj(get(rs, '0'))) {
+                        return
+                    }
+                    let ex = await woItems.tasksArchive.select({ id: taskId })
+                    archExisted = ex.length > 0
+                    cur = rs[0]
+                    chkWrite(await woItems.tasksArchive.save(cur), 'tasksArchive.save')
+                    chkWrite(await woItems.tasks.del({ id: taskId }), 'tasks.del', true)
+                    stat.tasks += 1
+                })
+            },
+            undo: async () => {
+                if (!cur) {
+                    return
+                }
+                await kmx('task:' + taskId, async () => {
+                    chkWrite(await woItems.tasks.insert(cur), 'tasks.insert')
+                    if (!archExisted) {
+                        chkWrite(await woItems.tasksArchive.del({ id: cur.id }), 'tasksArchive.del')
+                    }
+                })
+            },
+        }
+    }
+    //opMoveMessages: 刪頻道時將該頻道全部訊息 (含 task / taskReply) 移入冷表 messagesArchive. 排在該頻道全部任務搬完之後, 且於執行時才讀取訊息:
+    //任務搬走後 respondTask 得 errTaskNotFound (不再新增 taskReply), 發訊被 channels 表鎖擋在刪除之外, 故此時讀到之集合即最終集合 (含搬任務前才完成之 taskReply).
+    //一次 upsert 冷表 (整批)、再整批刪熱表; 補償: 熱表補回 (已存在則略過)、刪冷表複本 (僅本次新增者, 冷表搬移前已有之同 id 列不刪).
+    //搬移與補償皆於 msgarch:<channelId> 鎖內, 與封存掃描之訊息階段 (archiveSweep 依頻道分組取同一把鎖) 互斥: 否則掃描可於「冷表已寫、熱表尚未刪」之間與補償 (補回熱表、刪冷表複本) 交錯, 使該則訊息兩表皆無.
+    //鎖序: 表鎖 → msgarch 鎖 (封存掃描只取 msgarch 鎖, 不取表鎖, 無倒置).
+    let opMoveMessages = (channelId, stat) => {
+        let moved = []
+        let archIds = new Set()
+        let key = 'msgarch:' + channelId
+        return {
+            redo: async () => {
+                await kmx(key, async () => {
+                    let hot = await woItems.messages.select({ channelId })
+                    if (hot.length === 0) {
+                        return
+                    }
+                    let ex = await woItems.messagesArchive.select({ channelId })
+                    archIds = new Set(ex.map((m) => m.id))
+                    moved = hot
+                    chkWrite(await woItems.messagesArchive.save(hot), 'messagesArchive.save')
+                    chkWrite(await woItems.messages.del(hot.map((m) => ({ id: m.id }))), 'messages.del')
+                    stat.messages += hot.length
+                })
+            },
+            undo: async () => {
+                if (moved.length === 0) {
+                    return
+                }
+                await kmx(key, async () => {
+                    chkWrite(await woItems.messages.insert(moved), 'messages.insert')
+                    let ids = moved.filter((m) => !archIds.has(m.id)).map((m) => ({ id: m.id }))
+                    if (ids.length > 0) {
+                        chkWrite(await woItems.messagesArchive.del(ids), 'messagesArchive.del')
+                    }
+                })
+            },
+        }
+    }
+    //buildChannelDeleteOps: 刪除一個頻道之全部寫入單元 (清單存檔之刪除集合與清單刪除、單筆刪除共用). 回 { ops, last, stat }:
+    //ops 為搬移與成員列刪除, 順序 任務 (逐筆) → 訊息 (整批) → 成員列; last 為頻道列刪除, 由呼叫端排在**全部頻道之 ops 之後** (頻道列最後刪):
+    //中途中斷 (如行程崩潰, 補償來不及) 時, 本次請求涉及之頻道皆仍在, 原請求重送即可補完 (搬移冪等), 不會留下「頻道已刪而訊息 / 任務仍在熱表」之孤兒, 多頻道亦同.
+    //stat 於執行後為實際搬移筆數. 頻道之訊息與任務移入封存表 (使用者 2026-10-23 裁示 Q2: 不直接刪除、不留孤兒); 來源頻道已刪除由封存列之 channelId 不在 channels 表得知 (ID 為 UUID 不重用), 不增 schema 欄
+    let buildChannelDeleteOps = async (ch) => {
+        let stat = { tasks: 0, messages: 0 }
+        let ops = []
+        let ts = await woItems.tasks.select({ channelId: ch.id })
+        for (let t of ts) {
+            ops.push(opMoveTask(t.id, stat))
+        }
+        ops.push(opMoveMessages(ch.id, stat))
+        let ms = await woItems.channelMembers.select({ channelId: ch.id })
+        for (let m of ms) {
+            ops.push(opDeleteMember(m))
+        }
+        return { ops, last: opDelete('channels', ch), stat }
+    }
+    //logArchived: 刪頻道成功後記每個頻道實際移入封存表之任務 / 訊息筆數 (審計用; 只記頻道 id 與筆數)
+    let logArchived = (stats) => {
+        for (let { channelId, stat } of stats) {
+            srLog.info({ event: 'channelArchived', channelId, tasksMoved: stat.tasks, messagesMoved: stat.messages })
+        }
+    }
+
+
     //runOps: 依序執行寫入單元; 任一失敗則反向補償 (含失敗中之那一步). 全部補償成功回 'saveRolledBack', 補償亦失敗回 'saveWriteFail' (部分資料可能已寫入); 皆記 log
     let runOps = async (event, ops) => {
         let done = []
@@ -422,16 +523,19 @@ function procCore(deps = {}) {
                     }
                 }
 
-                //刪除頻道: 成員列連帶刪除 (原則 6: 被刪除時所有引用連帶清理); 該頻道之訊息與任務維持現行 (不刪、不搬, 待使用者裁示 Q2)
+                //刪除頻道: 成員列連帶刪除、訊息與任務移入封存表 (原則 6: 被刪除時所有引用連帶清理; 使用者 2026-10-23 裁示 Q2: 移入封存表而非直接刪除), 與上列寫入同一次補償範圍
+                let stats = []
+                let lasts = []
                 for (let ch of dels) {
-                    let ms = await woItems.channelMembers.select({ channelId: ch.id })
-                    for (let m of ms) {
-                        ops.push(opDeleteMember(m))
-                    }
-                    ops.push(opDelete('channels', ch))
+                    let b = await buildChannelDeleteOps(ch)
+                    ops.push(...b.ops)
+                    lasts.push(b.last)
+                    stats.push({ channelId: ch.id, stat: b.stat })
                 }
+                ops.push(...lasts) //頻道列最後刪 (全部頻道之搬移與成員列刪除之後)
 
                 await runOps('saveChannels', ops)
+                logArchived(stats)
 
                 let rowsNew = await woItems.channels.select({})
                 return {
@@ -447,7 +551,7 @@ function procCore(deps = {}) {
 
 
     //deleteChannelsCore: 頻道刪除之共用核心. baseline 只含被選取列 (逐列粒度: 刪除是針對特定列之命令, 他列被改不應擋; 先刪先贏).
-    //表鎖內: 被選列須全部仍存在 (任一不存在 → rowNotFound, 含不帶基準者) → (有基準時)比對 → 成員列連帶刪除 → 刪頻道; 該頻道之訊息與任務維持現行 (待使用者裁示 Q2).
+    //表鎖內: 被選列須全部仍存在 (任一不存在 → rowNotFound, 含不帶基準者) → (有基準時)比對 → 該頻道之任務與訊息移入封存表 → 成員列連帶刪除 → 刪頻道 (同一次補償範圍; 見 buildChannelDeleteOps).
     let deleteChannelsCore = async (userId, ids, baseline) => {
 
         return await guarded('deleteChannels', {
@@ -460,14 +564,17 @@ function procCore(deps = {}) {
             contract: channelsContract,
             write: async (sub) => {
                 let ops = []
+                let lasts = []
+                let stats = []
                 for (let ch of sub) {
-                    let ms = await woItems.channelMembers.select({ channelId: ch.id })
-                    for (let m of ms) {
-                        ops.push(opDeleteMember(m))
-                    }
-                    ops.push(opDelete('channels', ch))
+                    let b = await buildChannelDeleteOps(ch)
+                    ops.push(...b.ops)
+                    lasts.push(b.last)
+                    stats.push({ channelId: ch.id, stat: b.stat })
                 }
+                ops.push(...lasts) //頻道列最後刪 (全部頻道之搬移與成員列刪除之後)
                 await runOps('deleteChannels', ops)
+                logArchived(stats)
                 return { deleted: sub.map((r) => r.id) }
             },
         })
@@ -542,7 +649,7 @@ function procCore(deps = {}) {
     }
 
 
-    //deleteChannel: 刪除單一頻道 (單筆 API; 成員列連帶刪除, 訊息與任務維持現行). 列不存在 → rowNotFound (修 O2).
+    //deleteChannel: 刪除單一頻道 (單筆 API; 成員列連帶刪除, 訊息與任務移入封存表, 見 buildChannelDeleteOps). 列不存在 → rowNotFound (修 O2).
     let deleteChannel = async (userId, id) => {
 
         //check
@@ -1437,12 +1544,25 @@ function procCore(deps = {}) {
             let bGuard = bTaskKind && kpHotTask[m.taskId] === true //其任務仍在熱表 → 不搬
             return b1 && !bGuard
         })
-        if (msOld.length > 0) {
-            //冷表複本逐筆檢查 (ORM 對單筆失敗回 ok:0 而不 reject): 任一筆未成功即拋出, 不刪熱表 (否則失敗那筆冷熱皆無); 重跑冪等
-            chkWrite(await woItems.messagesArchive.save(msOld), 'messagesArchive.save')
-            for (let m of msOld) {
-                chkWrite(await woItems.messages.del({ id: m.id }), 'messages.del')
+        //依頻道分組, 逐組於 msgarch:<channelId> 鎖內「先 upsert 冷表、再逐筆刪熱表」: 與刪頻道之訊息搬移 / 補償 (opMoveMessages) 互斥,
+        //避免掃描於「冷表已寫、熱表尚未刪」之間與補償 (補回熱表、刪冷表複本) 交錯而使該則訊息兩表皆無. 掃描只取此鎖 (不取表鎖), 與刪頻道之鎖序 (表鎖 → msgarch 鎖) 無倒置.
+        //冷表複本逐筆檢查 (ORM 對單筆失敗回 ok:0 而不 reject): 任一筆未成功即拋出, 不刪熱表 (否則失敗那筆冷熱皆無); 重跑冪等
+        let kpCh = new Map()
+        for (let m of msOld) {
+            let arr = kpCh.get(m.channelId)
+            if (!arr) {
+                arr = []
+                kpCh.set(m.channelId, arr)
             }
+            arr.push(m)
+        }
+        for (let [cid, arr] of kpCh) {
+            await kmx('msgarch:' + cid, async () => {
+                chkWrite(await woItems.messagesArchive.save(arr), 'messagesArchive.save')
+                for (let m of arr) {
+                    chkWrite(await woItems.messages.del({ id: m.id }), 'messages.del')
+                }
+            })
         }
 
         return { tasksMoved, messagesMoved: msOld.length }

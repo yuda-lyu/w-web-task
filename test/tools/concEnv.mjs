@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..', '_tmp', 'concurrency')
 
 
-//mkEnv: 建立一個獨立資料庫之環境. 回 { pc, woItems, wp, kmx, logs, close }; logs 收 srLog.error 之記錄 (供斷言補償失敗有記 log)
+//mkEnv: 建立一個獨立資料庫之環境. 回 { pc, woItems, wp, kmx, logs, infos, close }; logs 收 srLog.error 之記錄 (供斷言補償失敗有記 log), infos 收 srLog.info 之記錄 (供斷言審計 log)
 async function mkEnv(name) {
     let dir = path.join(ROOT, name)
     fs.rmSync(dir, { recursive: true, force: true })
@@ -30,8 +30,11 @@ async function mkEnv(name) {
     let { woItems, withTabLocks, guardWrite } = wp
 
     let logs = []
+    let infos = []
     let srLog = {
-        info() {},
+        info(o) {
+            infos.push(o)
+        },
         warn() {},
         error(o) {
             logs.push(o)
@@ -47,7 +50,7 @@ async function mkEnv(name) {
         await wp.closeAll()
         fs.rmSync(dir, { recursive: true, force: true })
     }
-    return { pc, woItems, wp, kmx, logs, close, dir }
+    return { pc, woItems, wp, kmx, logs, infos, close, dir }
 }
 
 
@@ -80,6 +83,31 @@ function gate() {
 }
 
 
+//pauseOnce: 在 woItems[tab][method] 第一次符合 match 之呼叫前停住 (人為延遲; 以閘門放行). 回 { reached, release, restore }
+function pauseOnce(env, tab, method, match = () => true) {
+    let g = gate()
+    let reached = gate()
+    let t = env.woItems[tab]
+    let orig = t[method]
+    let hit = false
+    t[method] = async (...a) => {
+        if (!hit && match(...a)) {
+            hit = true
+            reached.open()
+            await g.promise
+        }
+        return orig.apply(t, a)
+    }
+    return {
+        reached: reached.promise,
+        release: g.open,
+        restore: () => {
+            t[method] = orig
+        }
+    }
+}
+
+
 //rejKey: 取 reject 之值 (procCore 一律 reject 字串鍵); 未 reject 回 null
 async function rejKey(fn) {
     try {
@@ -106,7 +134,7 @@ async function snapshot(woItems) {
 //installFaults: 在 woItems 各表之 insert / save / del 上安裝可程式化的硬失敗 (模擬磁碟滿等非競爭失敗).
 //arm(k): 自此起算第 k 次寫入拋錯; rollbackFail 為 true 時, 失敗後之所有寫入 (含補償) 皆拋錯;
 //afterWrite 為 true 時, 第 k 次寫入「已實際寫入後」才拋錯 (模擬單次呼叫已部分生效, 補償須含失敗中那一步). 回 { arm, st, restore }
-function installFaults(woItems, tabs = ['channels', 'channelMembers', 'messages', 'tasks']) {
+function installFaults(woItems, tabs = ['channels', 'channelMembers', 'messages', 'tasks', 'messagesArchive', 'tasksArchive']) {
     let st = { n: 0, failAt: 0, failSet: null, rollbackFail: false, afterWrite: false, failed: false, calls: [] }
     let origs = []
     for (let tab of tabs) {
@@ -150,4 +178,4 @@ function installFaults(woItems, tabs = ['channels', 'channelMembers', 'messages'
 }
 
 
-export { ds, mkEnv, cleanRoot, baselineOfChannels, baselineOfMembers, sleep, gate, rejKey, snapshot, installFaults, channelsContract, getMembersContract }
+export { ds, mkEnv, cleanRoot, baselineOfChannels, baselineOfMembers, sleep, gate, pauseOnce, rejKey, snapshot, installFaults, channelsContract, getMembersContract }

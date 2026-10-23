@@ -362,6 +362,32 @@ async function waitRejectDialog(page, expectText) {
     return page.locator(SEL_DIALOG_PANEL).filter({ hasText: expectText }).last()
 }
 
+//=== E2E-016 / E2E-017（儲存格編輯器開啟中、已輸入未按 Enter 時收到他人推播: 輸入不丟、視同草稿）用之 helper ===
+
+//Pattern B 的前半: 雙擊進入編輯器、清空、一次注入 value, 不按 Enter（輸入尚未提交進列資料）; 回前驗編輯器內容等於 value。
+async function typeGridCellKeepEditing(page, rowIndex, colId, value) {
+    let cell = page.locator(`.ag-center-cols-container .ag-row[row-index="${rowIndex}"] [col-id="${colId}"]`).first()
+    await cell.scrollIntoViewIfNeeded()
+    await cell.dblclick()
+    await page.waitForTimeout(900) //editor mount settle
+    let editor = page.locator('.ag-cell-inline-editing input:not(.ag-checkbox-input)').first()
+    await editor.waitFor({ state: 'visible', timeout: 5000 })
+    let cur = await editor.inputValue().catch(() => '')
+    if (cur) { await page.keyboard.press('End'); for (let k = 0; k < cur.length + 2; k++) { await page.keyboard.press('Backspace') } }
+    await page.keyboard.insertText(value)
+    await page.waitForTimeout(200)
+    let got = await editor.inputValue()
+    if (got !== value) { throw new Error(`typeGridCellKeepEditing 編輯器內容應為「${value}」, 實得「${got}」`) }
+}
+
+//目前是否有儲存格編輯器開啟（使用者觀察: 格內有輸入框）及其內容。
+async function gridEditorState(page) {
+    return await page.evaluate(() => {
+        let el = document.querySelector('.ag-cell-inline-editing input:not(.ag-checkbox-input)')
+        return { open: !!el, value: el ? el.value : null }
+    })
+}
+
 //case 定義：run(page,lang) 走流程並回傳截圖 buffer（或多階段 [{name,buf}]）；semantic(page,lang) 於產製端與比對端皆在寫檔／比對前執行（runCase）。
 //stages＝該案產出之圖鍵（多數單張, 圖鍵＝案例鍵; E2E-002/004/005 兩階段; E2E-007 三階段）; 陣列順序＝mocha it 順序＝產製順序。
 const CASES = [
@@ -1198,6 +1224,220 @@ const CASES = [
             let rs = await page.evaluate(async (cid) => { let r = await window.$vo.$fapi.getChannelMembers(cid); return r.map((m) => ({ memberId: m.memberId, role: m.role })) }, CH_DEMO_ID)
             assert.strictEqual(rs.length, 2)
             assert.ok(rs.every((m) => !/^draft-role-/.test(m.role || '')), '本人未存之草稿不得寫入')
+        },
+    },
+    {
+        //E2E-016：後台頻道頁切編輯模式、雙擊「訂單服務」描述欄並輸入文字但尚未按 Enter（編輯器開啟中、輸入尚未進列資料）, 此時另一位管理員改了別的頻道 →
+        //編輯器與已輸入之文字不丟、出現「資料已被他人更新」提示（視同草稿）; 按 Esc 取消編輯後依一般規則換成最新資料（無未存修改）;
+        //另一輪同樣情境改按 Enter 提交 → 成為草稿（儲存鈕出現、提示條保留、畫面仍不顯示他人新值）, 點儲存整次被拒（基準凍結, 未存任何變更）。
+        //6 步真實 user path：①rail 點 Admin（預設頻道子頁）②點編輯模式開關 ③雙擊「訂單服務」描述欄並輸入（不按 Enter）
+        //  ④另一位管理員改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條且編輯器仍開 ⑥按 Esc → 最新資料;
+        //  再一輪③④⑤後按 Enter → 草稿 → 點儲存 → 被拒。
+        //修前（task-verify01 N1）: 步驟④推播即把整張表重建, 編輯器被關閉、已輸入之文字靜默丟失（isModified 看不到未提交之輸入）。
+        //清理：寫入皆在測試實例資料庫, 由 per-case reseed 還原; 固定時鐘於 arrange 後立即關閉。
+        name: 'E2E-016-channels-editor-open-push',
+        stages: ['E2E-016-1-editor-kept', 'E2E-016-2-after-esc'],
+        run: async (page, lang) => {
+            let ok = await page.evaluate(() => window.$vo.$t('ok'))
+            let tStaleNotice = await page.evaluate(() => window.$vo.$t('draftStaleNotice'))
+            let tSaveStale = await page.evaluate(() => window.$vo.$t('saveStale'))
+            let draftA = `typed-not-entered-${lang}`
+            let otherA = `edited-by-other-admin-A-${lang}`
+            let draftB = `typed-then-enter-${lang}`
+            let otherB = `edited-by-other-admin-B-${lang}`
+
+            //進後台頻道子頁（首步「點後台」共用 E2E-005-1-click-admin）→ 切編輯模式
+            await clickRail(page, 'admin')
+            await waitUntilExist(page, '後台頻道 grid 載入', () => (((document.querySelector('.ag-root-wrapper') || {}).innerText) || '').includes('訂單服務'), { timeout: 20000 })
+            await page.waitForTimeout(500)
+            await page.locator('[data-fmid="channels-edit-switch"]').first().click()
+            await page.waitForTimeout(700)
+            let riDemo = await rowIndexByText(page, 'name', CH_DEMO_NAME)
+            let origDesc = await gridCellText(page, riDemo, 'description')
+
+            //=== 一、按 Esc 取消 ===
+            //act：雙擊「訂單服務」描述欄並輸入, 不按 Enter（編輯器開啟中）
+            await typeGridCellKeepEditing(page, riDemo, 'description', draftA)
+            assert.ok(!(await page.locator('[data-fmid="channels-save-btn"]').count()), '前置: 輸入尚未提交, 不應有儲存鈕（尚無未存修改）')
+
+            //arrange（未走 UI）：另一位管理員改「報表產製」描述 → 資料通道推播整張 channels 表
+            await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherA }]])
+            await waitUntilExist(page, '前端 store 已收到他人推播', (d) => (window.$vo.$store.state.channels || []).some((c) => c.id === 'id-for-channel-report' && c.description === d), { timeout: 25000, arg: otherA })
+            await page.waitForTimeout(500) //負向觀察窗: 推播處理後若被重建, 編輯器會在此期間消失
+
+            //spec E2E-016 驗證(1)：推播後編輯器仍開啟、已輸入之文字仍在（修前: 整張表被重建, 編輯器關閉、輸入丟失）
+            let st = await gridEditorState(page)
+            assert.ok(st.open, 'N1: 編輯器開啟中收到推播不得關閉編輯器（修前整張表被重建）')
+            assert.strictEqual(st.value, draftA, 'N1: 已輸入未按 Enter 之文字不得丟失')
+            //(2) 提示條出現（視同草稿）, 文字等於 draftStaleNotice
+            let noticeTxt = await waitStaleNotice(page)
+            assert.ok(noticeTxt.includes(tStaleNotice), `提示條應含「${tStaleNotice}」, 實得「${noticeTxt}」`)
+            //(3) 不重建: 他人之新值尚未顯示; 提示條出現使版面下移後編輯器仍在、文字仍在
+            let riReport = await rowIndexByText(page, 'name', '報表產製')
+            assert.notStrictEqual(await gridCellText(page, riReport, 'description'), otherA, '編輯器開啟中畫面不顯示他人之新值（不重建）')
+            st = await gridEditorState(page)
+            assert.ok(st.open && st.value === draftA, '提示條出現後編輯器與輸入仍在')
+            //視覺①：提示條整顆（編輯器仍開啟於其下之表格內）
+            let s1 = await captureStableWithBox(page, '[data-fmid="draft-stale-notice"]')
+
+            //act：按 Esc 取消編輯 → 編輯器關閉、無未存修改 → 依一般規則換成最新資料
+            await page.keyboard.press('Escape')
+            await waitUntilExist(page, 'Esc 後見他人之新值（重建）', (d) => (((document.querySelector('.ag-root-wrapper') || {}).innerText) || '').includes(d), { timeout: 15000, arg: otherA })
+            await waitUntilExist(page, '提示條消失', () => !document.querySelector('[data-fmid="draft-stale-notice"]'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            //(4) Esc 取消之文字不入列（回到原值）, 無儲存鈕, 編輯器已關
+            let riDemo2 = await rowIndexByText(page, 'name', CH_DEMO_NAME)
+            assert.strictEqual(await gridCellText(page, riDemo2, 'description'), origDesc, 'Esc 取消之輸入不得留在格內')
+            assert.ok(!(await page.locator('[data-fmid="channels-save-btn"]').count()), 'Esc 取消後無未存修改: 不應有儲存鈕')
+            assert.ok(!(await gridEditorState(page)).open, 'Esc 後編輯器已關閉')
+            //視覺②：重建後的資料表（標頭與四個頻道列; 他人之新值已顯示）
+            let s2 = await captureStableWithBox(page, gridContentBox(SEL_GRID))
+
+            //=== 二、按 Enter 提交（延伸驗證, 不另拍標準圖）===
+            await typeGridCellKeepEditing(page, riDemo2, 'description', draftB)
+            await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherB }]])
+            await waitUntilExist(page, '前端 store 已收到他人第二次推播', (d) => (window.$vo.$store.state.channels || []).some((c) => c.id === 'id-for-channel-report' && c.description === d), { timeout: 25000, arg: otherB })
+            await page.waitForTimeout(500)
+            st = await gridEditorState(page)
+            assert.ok(st.open && st.value === draftB, '(二) 編輯器開啟中收到推播: 編輯器與輸入仍在')
+            await waitStaleNotice(page)
+            await page.keyboard.press('Enter') //提交 → 草稿
+            await waitUntilExist(page, 'Enter 後草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="channels-save-btn"]'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            //(5) 提交後草稿保留（不因延後之推播重建而丟）、提示條保留、仍不顯示他人新值（基準凍結）
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'name', CH_DEMO_NAME), 'description'), draftB, '(二) Enter 提交之草稿不得被延後之推播重建丟掉')
+            assert.ok(await page.locator('[data-fmid="draft-stale-notice"]').count() > 0, '(二) 草稿成立後提示條仍在')
+            assert.notStrictEqual(await gridCellText(page, await rowIndexByText(page, 'name', '報表產製'), 'description'), otherB, '(二) 草稿期間畫面不顯示他人之新值')
+            //(6) 基準凍結: 點儲存整次被拒, 未存任何變更
+            await page.locator('[data-fmid="channels-save-btn"]').first().click()
+            await waitRejectDialog(page, tSaveStale)
+            await clickConfirmBtn(page, ok)
+            let after = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+            assert.strictEqual(after.find((c) => c.id === CH_DEMO_ID).description, origDesc, '(二) 被拒後「訂單服務」描述不得被寫入')
+            assert.strictEqual(after.find((c) => c.id === 'id-for-channel-report').description, otherB, '(二) 他人之寫入保留')
+
+            //=== 三、已有草稿 (上段之 draftB 被拒後保留) 時再開另一格之編輯器並收到推播; 點表格下方空白處使編輯器失焦關閉（延伸驗證, 不另拍標準圖）===
+            let otherC = `edited-by-other-admin-C-${lang}`
+            let draftC = `typed-over-draft-${lang}`
+            let riEtl = await rowIndexByText(page, 'name', 'ETL 管線')
+            await typeGridCellKeepEditing(page, riEtl, 'description', draftC)
+            await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherC }]])
+            await waitUntilExist(page, '前端 store 已收到他人第三次推播', (d) => (window.$vo.$store.state.channels || []).some((c) => c.id === 'id-for-channel-report' && c.description === d), { timeout: 25000, arg: otherC })
+            await page.waitForTimeout(500)
+            st = await gridEditorState(page)
+            assert.ok(st.open && st.value === draftC, '(三) 已有草稿時編輯器開啟中收到推播: 編輯器與輸入仍在')
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'name', CH_DEMO_NAME), 'description'), draftB, '(三) 既有草稿仍在')
+            await page.mouse.click(900, 700) //表格下方空白處: 編輯器失焦 → 關閉並提交輸入
+            await waitUntilExist(page, '(三) 失焦後編輯器關閉', () => !document.querySelector('.ag-cell-inline-editing'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'name', 'ETL 管線'), 'description'), draftC, '(三) 失焦提交之輸入成為草稿, 不被延後之推播重建丟掉')
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'name', CH_DEMO_NAME), 'description'), draftB, '(三) 先前之草稿仍在')
+            assert.ok(await page.locator('[data-fmid="channels-save-btn"]').count() > 0, '(三) 草稿仍在: 儲存鈕應仍顯示')
+            assert.ok(await page.locator('[data-fmid="draft-stale-notice"]').count() > 0, '(三) 提示條仍在')
+            assert.notStrictEqual(await gridCellText(page, await rowIndexByText(page, 'name', '報表產製'), 'description'), otherC, '(三) 草稿期間畫面不顯示他人之新值')
+            return [
+                { name: 'E2E-016-1-editor-kept', buf: s1 },
+                { name: 'E2E-016-2-after-esc', buf: s2 },
+            ]
+        },
+        semantic: async (page) => {
+            //spec E2E-016 驗證(7)：後端終態——他人之寫入已生效, 本人輸入之文字（Esc 取消 / Enter 後存檔被拒）皆未寫入
+            let rs = await page.evaluate(async () => { let r = await window.$vo.$fapi.getChannelsList(); return r.map((c) => ({ id: c.id, description: c.description })) })
+            assert.ok(/^edited-by-other-admin-C-/.test(rs.find((c) => c.id === 'id-for-channel-report').description), '他人之寫入應生效 (最後一次為 C)')
+            assert.ok(!/^typed-/.test(rs.find((c) => c.id === CH_DEMO_ID).description || ''), '本人輸入之文字不得寫入')
+        },
+    },
+    {
+        //E2E-017：後台成員頁（預設頻道「訂單服務」）切編輯模式、雙擊 agent-demo 之角色欄並輸入文字但尚未按 Enter, 此時另一位管理員為同頻道新增成員 →
+        //編輯器與已輸入之文字不丟、出現「資料已被他人更新」提示（視同草稿）; 按 Esc 取消後提示條消失（無未存修改）;
+        //另一輪同樣情境改按 Enter 提交 → 草稿（儲存鈕出現、提示條保留）, 點儲存整次被拒。
+        //6 步真實 user path：①rail 點 Admin→子選單「成員」②點編輯模式開關 ③雙擊角色欄並輸入（不按 Enter）④另一位管理員新增成員（arrange, 未走 UI）⑤見提示條且編輯器仍開 ⑥按 Esc;
+        //  再一輪③④⑤後按 Enter → 草稿 → 點儲存 → 被拒。
+        //成員頁快照本不隨推播重建（既有行為, 見已知缺口）, 本案驗證重點為: 提示（修前編輯器開啟中不顯示提示條, 使用者不知畫面已過期）與按 Enter 提交後草稿保留、存檔被拒。
+        //清理：同 E2E-016。
+        name: 'E2E-017-members-editor-open-push',
+        stages: ['E2E-017-1-editor-kept'],
+        run: async (page, lang) => {
+            let ok = await page.evaluate(() => window.$vo.$t('ok'))
+            let tStaleNotice = await page.evaluate(() => window.$vo.$t('draftStaleNotice'))
+            let tSaveStale = await page.evaluate(() => window.$vo.$t('saveStale'))
+            let draftA = `typed-role-not-entered-${lang}`
+            let otherA = `added-by-other-A-${lang}`
+            let draftB = `typed-role-then-enter-${lang}`
+            let otherB = `added-by-other-B-${lang}`
+
+            //進後台成員子頁（首步「點後台」共用 E2E-005-1-click-admin）→ 切編輯模式
+            await clickRail(page, 'admin')
+            await waitUntilExist(page, '後台成員子頁鈕就緒', () => !!document.querySelector('[data-fmid="admin-sub-mmMembers"]'), { timeout: 20000 })
+            await page.locator('[data-fmid="admin-sub-mmMembers"]').first().click()
+            await waitUntilExist(page, '後台成員 grid 載入 agent-demo', () => (document.body.innerText || '').includes('agent-demo'), { timeout: 20000 })
+            await page.waitForTimeout(500)
+            await page.locator('[data-fmid="members-edit-switch"]').first().click()
+            await page.waitForTimeout(700)
+            let riAgent = await rowIndexByText(page, 'memberId', 'agent-demo')
+            let origRole = await gridCellText(page, riAgent, 'role')
+
+            //=== 一、按 Esc 取消 ===
+            await typeGridCellKeepEditing(page, riAgent, 'role', draftA)
+            assert.ok(!(await page.locator('[data-fmid="members-save-btn"]').count()), '前置: 輸入尚未提交, 不應有儲存鈕')
+            await otherAdminCall(page, 'saveChannelMembers', [CH_DEMO_ID, [{ memberId: otherA, memberType: 'human', role: 'member' }]])
+            await waitUntilExist(page, '前端 store 已收到他人推播', (m) => (window.$vo.$store.state.channelMembers || []).some((x) => x.memberId === m), { timeout: 25000, arg: otherA })
+            await page.waitForTimeout(500) //負向觀察窗
+
+            //spec E2E-017 驗證(1)：編輯器仍開啟、已輸入之文字仍在; (2) 提示條出現（修前: 無未存修改即不顯示提示）
+            let st = await gridEditorState(page)
+            assert.ok(st.open, 'N1: 編輯器開啟中收到推播不得關閉編輯器')
+            assert.strictEqual(st.value, draftA, 'N1: 已輸入未按 Enter 之文字不得丟失')
+            let noticeTxt = await waitStaleNotice(page)
+            assert.ok(noticeTxt.includes(tStaleNotice), `提示條應含「${tStaleNotice}」, 實得「${noticeTxt}」`)
+            //(3) 他人新增之成員尚未出現於畫面; 提示條出現使版面下移後編輯器與輸入仍在
+            assert.ok(!(await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes(otherA), '畫面不顯示他人新增之成員（不重建）')
+            st = await gridEditorState(page)
+            assert.ok(st.open && st.value === draftA, '提示條出現後編輯器與輸入仍在')
+            let s1 = await captureStableWithBox(page, '[data-fmid="draft-stale-notice"]')
+
+            //act：按 Esc 取消編輯 → 無未存修改 → 提示條消失
+            await page.keyboard.press('Escape')
+            await waitUntilExist(page, 'Esc 後提示條消失（無未存修改）', () => !document.querySelector('[data-fmid="draft-stale-notice"]'), { timeout: 8000 })
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role'), origRole, 'Esc 取消之輸入不得留在格內')
+            assert.ok(!(await page.locator('[data-fmid="members-save-btn"]').count()), 'Esc 取消後無未存修改: 不應有儲存鈕')
+
+            //=== 二、按 Enter 提交（延伸驗證, 不另拍標準圖）===
+            // 他人已新增 otherA 而本畫面未重載（成員頁不自動重載）→ 先「重新載入」取最新基準再做第二輪: 切換頻道再回來（無草稿, 無確認框）
+            await selectMembersChannel(page, '報表產製')
+            await waitUntilExist(page, '已換頻道', () => { let g = document.querySelector('.ag-root-wrapper'); return !g || !(g.innerText || '').includes('agent-demo') }, { timeout: 10000 })
+            await selectMembersChannel(page, CH_DEMO_NAME)
+            await waitUntilExist(page, '回原頻道見他人新增之成員', (m) => (((document.querySelector('.ag-root-wrapper') || {}).innerText) || '').includes(m), { timeout: 15000, arg: otherA })
+            await page.waitForTimeout(500)
+            let riAgent2 = await rowIndexByText(page, 'memberId', 'agent-demo')
+            await typeGridCellKeepEditing(page, riAgent2, 'role', draftB)
+            await otherAdminCall(page, 'saveChannelMembers', [CH_DEMO_ID, [{ memberId: otherB, memberType: 'human', role: 'member' }]])
+            await waitUntilExist(page, '前端 store 已收到他人第二次推播', (m) => (window.$vo.$store.state.channelMembers || []).some((x) => x.memberId === m), { timeout: 25000, arg: otherB })
+            await page.waitForTimeout(500)
+            st = await gridEditorState(page)
+            assert.ok(st.open && st.value === draftB, '(二) 編輯器開啟中收到推播: 編輯器與輸入仍在')
+            await waitStaleNotice(page)
+            await page.keyboard.press('Enter') //提交 → 草稿
+            await waitUntilExist(page, 'Enter 後草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
+            await page.waitForTimeout(500)
+            assert.strictEqual(await gridCellText(page, await rowIndexByText(page, 'memberId', 'agent-demo'), 'role'), draftB, '(二) Enter 提交之草稿保留')
+            assert.ok(await page.locator('[data-fmid="draft-stale-notice"]').count() > 0, '(二) 草稿成立後提示條仍在')
+            assert.ok(!(await page.evaluate(() => document.querySelector('.ag-root-wrapper').innerText)).includes(otherB), '(二) 草稿期間畫面不顯示他人新增之成員')
+            await page.locator('[data-fmid="members-save-btn"]').first().click()
+            await waitRejectDialog(page, tSaveStale)
+            await clickConfirmBtn(page, ok)
+            let after = await page.evaluate(async (cid) => (await window.$vo.$fapi.getChannelMembers(cid)).map((m) => ({ memberId: m.memberId, role: m.role })), CH_DEMO_ID)
+            assert.strictEqual(after.find((m) => m.memberId === 'agent-demo').role, origRole, '(二) 被拒後 agent-demo 角色不得被寫入')
+            assert.ok(after.some((m) => m.memberId === otherB), '(二) 他人新增之成員保留')
+            return [
+                { name: 'E2E-017-1-editor-kept', buf: s1 },
+            ]
+        },
+        semantic: async (page) => {
+            //spec E2E-017 驗證(6)：後端終態——agent-demo 與他人兩次新增之成員共 3 位, 本人輸入之角色文字未寫入
+            let rs = await page.evaluate(async (cid) => { let r = await window.$vo.$fapi.getChannelMembers(cid); return r.map((m) => ({ memberId: m.memberId, role: m.role })) }, CH_DEMO_ID)
+            assert.strictEqual(rs.length, 3)
+            assert.ok(rs.every((m) => !/^typed-role-/.test(m.role || '')), '本人輸入之角色文字不得寫入')
         },
     },
 ]

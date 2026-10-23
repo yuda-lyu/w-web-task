@@ -102,7 +102,8 @@ node g.initialData.mjs        # 初始化 DB (種子: demo 頻道)
 - **伺服器專有欄位** (`userId / timeCreate / userIdUpdate / timeUpdate / isActive / order`, 成員之 `lastSeenMessageId`) 不採用客戶端值; agent 已讀游標只由 `ackChannel` 更新, 後台成員存檔不會回寫舊游標.
 - **資料規則於後端強制**: 頻道名稱必填且不重複、同一頻道內 `(channelId, memberId)` 不重複 (以寫入後之結果判定, 可於同一次存檔刪掉既有重複列; 既有重複於成員頁以警告圖示提示); 成員清單每列 `channelId` 須等於參數.
 - **寫入中途硬失敗** (非競爭, 如磁碟滿) 依前像補償還原: 成功還原回 `saveRolledBack` (未做任何變更)、補償亦失敗回 `saveWriteFail` (部分資料可能已寫入, 已記 log).
-- **刪頻道**: 成員列連帶刪除; `postMessage` / `ackChannel` / 成員存檔對已刪或不存在之頻道回 `errChannelNotFound`. 該頻道之訊息與任務維持現行 (不刪、不搬; 待使用者裁示).
+- **刪頻道**: 成員列連帶刪除, 該頻道之**訊息與任務 (任何狀態, 含進行中) 整列移入既有封存表** `messagesArchive` / `tasksArchive` (不直接刪除、不留孤兒; 與刪除頻道同一次操作、同一補償範圍: 全有或全無, 中途失敗整次還原回 `saveRolledBack`). 搬入之列與搬移前完全相同, 以 `getArchivedTasks(channelId)` / `getArchivedMessages(channelId)` 讀取 (已刪頻道之 id 仍可查; 來源頻道已刪除由該 `channelId` 已不在頻道清單得知); 熱表統計 (`getStats`) 不再計入. 已搬走之任務不可再認領 / 回應 / 重置 (回 `errTaskNotFound`). `postMessage` / `ackChannel` / 成員存檔對已刪或不存在之頻道回 `errChannelNotFound`. **效能注意**: 搬移全程持有訊息與任務之表鎖, 期間全系統之發訊與任務操作會等待 (實測一頻道 400 任務 + 404 訊息約 2.1 秒); 刪除大頻道宜選離峰時段.
+- **編輯器開啟中之草稿保護**: 後台頻道頁 / 成員頁之儲存格編輯器已開啟、已輸入尚未按 Enter 時收到他人之更新, 視同有草稿 —— 不重建 (編輯器與已輸入之文字保留)、基準凍結、內容確實不同時顯示提示條; 編輯器關閉後依一般規則處理 (按 Enter 提交 → 草稿保留; 按 Esc 取消 → 頻道頁換成最新資料).
 - 部署前提: 單一行程、同表只由同一 WServOrm 實例寫入 (比對之讀取不經 ORM 快取).
 
 #### Upgrade Notes (多人同時編輯, 2026-10-23)
@@ -112,6 +113,8 @@ node g.initialData.mjs        # 初始化 DB (種子: demo 頻道)
 - **行為變更 (API 呼叫端)**: ①修改不存在之列回 `errRowNotFound` (原會新增); ②刪除不存在之列回 `errRowNotFound` (原回成功); ③頻道名稱空或重複、成員 `(channelId, memberId)` 重複於後端被拒 (`errChannelNameInvalid` / `errChannelNameDuplicate` / `errMemberDuplicate`; 原只前端擋或不擋) —— **若既有資料已有重複, 後台存檔會被擋至使用者修正 (刪除重複列)**; ④客戶端夾帶之 `userId / timeCreate / isActive / order / lastSeenMessageId` 不再寫入; ⑤`postMessage` / `ackChannel` 對已刪或不存在之頻道回 `errChannelNotFound` (原會寫入); ⑥刪頻道連帶刪成員列 (單筆 `saveChannel` / `saveChannelMember` / `deleteChannel` / `deleteChannelMember` 成功時之回傳形狀維持原 ORM 結果, 外部呼叫端不受影響; 新增清單 API 回 `{ inserted, modified, deleted, unchanged, rows }`).
 - **前端**: 後台頻道頁 / 成員頁改用清單級 API 並帶基準; 自行以 `$fapi.saveChannel` 等逐列呼叫之客製頁面仍可用 (單筆 API 保留), 但不享有基準保護. 成員頁於有未儲存修改時切換頻道會先確認 (取消則維持原頻道與草稿).
 - **語系鍵**: `server/procLang.mjs` 新增 `saveStale / errRowNotFound / errBaselineFormat / errRowsInvalid / saveRolledBack / saveWriteFail / errChannelNameInvalid / errChannelNameDuplicate / errChannelNotFound / errMemberChannelMismatch / errMemberDuplicate / draftStaleNotice / reloadData / reloadDiscardConfirm / switchChannelDiscardConfirm / memberDuplicate / memberInvalid` (eng + cht); 自訂 `kpLang` 覆寫者請補.
+- **行為變更 (刪頻道, 2026-10-23 使用者裁示)**: 刪除頻道時 (清單 `deleteChannels` / 清單存檔之刪除集合 / 單筆 `deleteChannel` 同) 該頻道之**訊息與任務整列移入封存表**, 原行為為「訊息與任務留在熱表成為孤兒」. 影響: ①熱表與 `getStats` 不再含已刪頻道之訊息 / 任務; ②進行中 (`pending` / `running`) 之任務一併移入封存表且維持原狀態 (快照), 之後不可再認領 / 回應 / 重置 —— 持有該任務之 agent 呼叫 `respondTask` 會得 `errTaskNotFound` (頻道已不存在, 屬預期); ③`getArchivedTasks` / `getArchivedMessages` 對已刪頻道之 `channelId` 可查 (後台任務頁之「顯示封存」以頻道選擇器切換, 已刪頻道不在選擇器內, 須以 API 查); ④後台頻道頁刪除確認框之文字改為提示「訊息與任務（含進行中者）將一併移入封存，且不可再認領或回應」(`deleteChannelConfirm`, eng + cht; 自訂 `kpLang` 覆寫者請補). **升版前已刪頻道所遺之孤兒訊息 / 任務不會自動搬移** (留在熱表, 仍計入統計): 稽核方式 —— 停機後以 `w-orm-lmdb` 開啟資料目錄 (`./db`) 讀熱表 `messages` / `tasks`, `channelId` 不在 `channels` 表 id 集合者即孤兒 (`getStats` 之訊息 / 任務總數亦含之); 需清理者由維運於停機後以離線工具處理 (可依 `buildChannelDeleteOps` 之相同順序搬入封存表).
+- **前端 (編輯器開啟中)**: 後台頻道頁 / 成員頁之儲存格編輯器已開啟、已輸入未按 Enter 時收到推播, 不再重建 (原頻道頁會整張重建, 編輯器被關閉、輸入靜默丟失), 並顯示草稿提示條 (新增 `src/plugins/mGridEdit.mjs`; 無語系鍵變更).
 - **稽核既有資料之重複** (升版後後台存檔被 `errChannelNameDuplicate` / `errMemberDuplicate` 擋下時): 頻道名稱重複以 `getChannelsList` 依 `name` 分組; 成員重複以 `getChannelMembers(channelId)` 依 `memberId` 分組, 於後台成員頁 (重複儲存格有警告圖示) 刪除多餘列.
 
 ### agent 處理訊息附件 (圖片/檔案)

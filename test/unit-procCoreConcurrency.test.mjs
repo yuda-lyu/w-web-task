@@ -5,7 +5,7 @@
 import assert from 'assert'
 import { digestRow } from 'w-serv-orm/src/baseline.mjs'
 import {
-    ds, mkEnv, cleanRoot, baselineOfChannels, baselineOfMembers, sleep, gate, rejKey, snapshot, installFaults, channelsContract
+    ds, mkEnv, cleanRoot, baselineOfChannels, baselineOfMembers, sleep, gate, pauseOnce, rejKey, snapshot, installFaults, channelsContract
 } from './tools/concEnv.mjs'
 
 
@@ -746,7 +746,7 @@ describe('unit-procCoreConcurrency', function() {
     // ── O7 / Q2: 刪頻道 ───────────────────────────────────────────────────────────
     describe('O7 / Q2: 刪頻道 —— 成員列連帶刪除、對已刪頻道之操作被拒', function() {
 
-        it('deleteChannel / deleteChannels 連帶刪除該頻道所有成員列 (含 agent 列); 訊息與任務維持現行 (不刪不搬; 使用者尚未裁示)', async function() {
+        it('deleteChannel / deleteChannels 連帶刪除該頻道所有成員列 (含 agent 列); 訊息與任務移入封存表 (Q2 已裁示 2026-10-23, 詳見「Q2」節)', async function() {
             await withEnv('o7', async (env) => {
                 let [c1, c2] = await seedChannels(env, [{ name: 'c1', agentId: AGENT }, { name: 'c2', agentId: 'agent-2' }])
                 await seedMembers(env, c1.id, [{ memberId: 'h1' }, { memberId: 'h2' }])
@@ -754,9 +754,11 @@ describe('unit-procCoreConcurrency', function() {
                 await env.pc.deleteChannel(ADMIN, c1.id)
                 assert.strictEqual((await env.woItems.channelMembers.select({ channelId: c1.id })).length, 0, '成員列連帶刪除')
                 assert.strictEqual((await env.woItems.channelMembers.select({ channelId: c2.id })).length, 1, '他頻道成員不動')
-                //待裁示 Q2: 訊息與任務維持現行
-                assert.strictEqual((await env.woItems.messages.select({ channelId: c1.id })).length, 1, '訊息維持 (待裁示)')
-                assert.strictEqual((await env.woItems.tasks.select({ channelId: c1.id })).length, 1, '任務維持 (待裁示)')
+                //Q2 (使用者 2026-10-23 裁示「移入封存表」): 訊息與任務自熱表移入封存表, 不留孤兒
+                assert.strictEqual((await env.woItems.messages.select({ channelId: c1.id })).length, 0, '熱表無殘留訊息')
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: c1.id })).length, 0, '熱表無殘留任務')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: c1.id })).length, 1, '訊息在封存表')
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: c1.id })).length, 1, '任務在封存表')
                 await env.pc.deleteChannels(ADMIN, [c2.id])
                 assert.strictEqual((await env.woItems.channelMembers.select({})).length, 0)
             })
@@ -786,6 +788,571 @@ describe('unit-procCoreConcurrency', function() {
                 assert.deepStrictEqual(r.deleted, [c1.id])
                 assert.strictEqual((await env.woItems.channelMembers.select({})).length, 0)
                 assert.strictEqual((await env.woItems.channels.select({ id: c2.id })).length, 1)
+            })
+        })
+    })
+
+
+    // ── Q2: 刪頻道 → 訊息與任務移入封存表 (使用者 2026-10-23 裁示「移入封存表」) ──────────────────────────────
+    describe('Q2: 刪頻道時該頻道之訊息與任務移入既有封存表 (messagesArchive / tasksArchive); 全有或全無, 與成員連帶刪除同一次操作', function() {
+
+        //seedBusy: 建立「忙碌頻道」(含主責 agent 列 + 1 個人類成員) 與「他頻道」(1 任務 + 1 訊息, 供驗證不受牽連).
+        //忙碌頻道: 純文字訊息 2、任務 4 (pending / running / done / error 各 1; 後兩者各有 taskReply) → 訊息共 8 (2 純文字 + 4 任務起源 + 2 回應鏡射)
+        async function seedBusy(env) {
+            let rs = await seedChannels(env, [{ name: 'busy', agentId: AGENT }, { name: 'other' }])
+            let ch = rs.find((c) => c.name === 'busy')
+            let other = rs.find((c) => c.name === 'other')
+            await seedMembers(env, ch.id, [{ memberId: 'h1' }])
+            await env.pc.postMessage('human-1', ch.id, 'plain-1')
+            await env.pc.postMessage('human-1', ch.id, 'plain-2')
+            let pend = (await env.pc.postMessage('human-1', ch.id, 'req-pending', { asTask: true })).task
+            let run = (await env.pc.postMessage('human-1', ch.id, 'req-running', { asTask: true })).task
+            let done = (await env.pc.postMessage('human-1', ch.id, 'req-done', { asTask: true })).task
+            let err = (await env.pc.postMessage('human-1', ch.id, 'req-error', { asTask: true })).task
+            await env.pc.claimTask(AGENT, run.id)
+            await env.pc.claimTask(AGENT, done.id)
+            await env.pc.respondTask(AGENT, done.id, 'answer-done', 'done')
+            await env.pc.claimTask(AGENT, err.id)
+            await env.pc.respondTask(AGENT, err.id, 'answer-err', 'error', 'errX')
+            await env.pc.postMessage('human-1', other.id, 'other-msg', { asTask: true })
+            return { ch, other, ids: { pend: pend.id, run: run.id, done: done.id, err: err.id } }
+        }
+
+        //byId: 依 id 排序 (供深度比對)
+        let byId = (rs) => rs.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
+        const PATHS = ['deleteChannel', 'deleteChannels', 'saveChannels (集合差)']
+        for (let i = 0; i < PATHS.length; i++) {
+            let pathName = PATHS[i]
+
+            it(`Q2 (${pathName}): 該頻道之訊息與任務 (含進行中) 整列移入封存表 —— 熱表無殘留、封存表列與搬移前完全相同、他頻道不動、統計不計`, async function() {
+                await withEnv(`q2-${i}`, async (env) => {
+                    let { ch, other, ids } = await seedBusy(env)
+                    let preTasks = byId(await env.woItems.tasks.select({ channelId: ch.id }))
+                    let preMsgs = byId(await env.woItems.messages.select({ channelId: ch.id }))
+                    let preOtherTasks = byId(await env.woItems.tasks.select({ channelId: other.id }))
+                    let preOtherMsgs = byId(await env.woItems.messages.select({ channelId: other.id }))
+                    assert.strictEqual(preTasks.length, 4, '前置: 4 個任務')
+                    assert.strictEqual(preMsgs.length, 8, '前置: 8 則訊息')
+                    assert.deepStrictEqual(preTasks.map((t) => t.state).sort(), ['done', 'error', 'pending', 'running'], '前置: 四種狀態')
+                    env.infos.length = 0
+
+                    //act: 三種入口
+                    if (pathName === 'deleteChannel') {
+                        await env.pc.deleteChannel(ADMIN, ch.id)
+                    }
+                    else if (pathName === 'deleteChannels') {
+                        let r = await env.pc.deleteChannels(ADMIN, [ch.id])
+                        assert.deepStrictEqual(r.deleted, [ch.id])
+                    }
+                    else {
+                        let A = await loadChannels(env)
+                        let rows = JSON.parse(JSON.stringify(A.rows)).filter((r) => r.id !== ch.id)
+                        let r = await env.pc.saveChannels(ADMIN, rows, { baseline: A.baseline })
+                        assert.deepStrictEqual(r.deleted, [ch.id])
+                    }
+
+                    //assert: 頻道與成員已刪; 熱表無殘留 (不留孤兒)
+                    assert.strictEqual((await env.woItems.channels.select({ id: ch.id })).length, 0)
+                    assert.strictEqual((await env.woItems.channelMembers.select({ channelId: ch.id })).length, 0)
+                    assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0, '熱表不得殘留該頻道之任務')
+                    assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0, '熱表不得殘留該頻道之訊息')
+                    //封存表: 列與搬移前完全相同 (格式、狀態、稽核欄皆不變; 進行中任務維持原狀態)
+                    assert.deepStrictEqual(byId(await env.woItems.tasksArchive.select({ channelId: ch.id })), preTasks, '封存表任務＝搬移前之熱表列')
+                    assert.deepStrictEqual(byId(await env.woItems.messagesArchive.select({ channelId: ch.id })), preMsgs, '封存表訊息＝搬移前之熱表列')
+                    //他頻道不動 (熱表原樣、封存表無)
+                    assert.deepStrictEqual(byId(await env.woItems.tasks.select({ channelId: other.id })), preOtherTasks)
+                    assert.deepStrictEqual(byId(await env.woItems.messages.select({ channelId: other.id })), preOtherMsgs)
+                    assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: other.id })).length, 0)
+                    assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: other.id })).length, 0)
+
+                    //既有查詢介面讀得到 (稽核 / 回顧; 已刪頻道之 id 仍可查)
+                    let at = await env.pc.getArchivedTasks(ADMIN, ch.id, 50, 'asc')
+                    assert.deepStrictEqual(at.map((t) => t.id), preTasks.map((t) => t.id).sort(), 'getArchivedTasks 讀得到全部 4 個任務')
+                    assert.strictEqual((await env.pc.getArchivedMessages(ADMIN, ch.id, 50)).length, 8, 'getArchivedMessages 讀得到全部 8 則訊息')
+                    assert.strictEqual(at.find((t) => t.id === ids.run).state, 'running', '進行中任務原樣保留於封存表 (快照)')
+                    //熱表查詢介面對已刪頻道為空
+                    assert.strictEqual((await env.pc.getTasks(ADMIN, ch.id, 50)).length, 0)
+                    assert.strictEqual((await env.pc.getMessages(ADMIN, ch.id, 50)).length, 0)
+
+                    //統計 (N4): 熱表孤兒不再計入 —— 僅餘「他頻道」之 1 頻道 / 1 任務 / 其訊息
+                    let st = await env.pc.getStats(ADMIN)
+                    assert.strictEqual(st.channels, 1)
+                    assert.strictEqual(st.tasks.total, 1)
+                    assert.strictEqual(st.messages, preOtherMsgs.length)
+
+                    //審計 log: 記實際搬移筆數
+                    let lg = env.infos.find((l) => l.event === 'channelArchived' && l.channelId === ch.id)
+                    assert.ok(lg, '應記 channelArchived')
+                    assert.strictEqual(lg.tasksMoved, 4)
+                    assert.strictEqual(lg.messagesMoved, 8)
+                })
+            })
+        }
+
+        it('Q2: 已搬進封存表之任務不可再被認領 / 回應 / 重置 / 以熱表查詢 (agent 對已刪頻道之任務得 errTaskNotFound); 發訊、已讀仍被拒 errChannelNotFound', async function() {
+            await withEnv('q2-after', async (env) => {
+                let { ch, ids } = await seedBusy(env)
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual(await rejKey(() => env.pc.claimTask(AGENT, ids.pend)), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.respondTask(AGENT, ids.run, 'late-answer', 'done')), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.resetTask(ADMIN, ids.err)), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.resetTask(ADMIN, ids.run)), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.getTask(ADMIN, ids.done)), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.postMessage('human-1', ch.id, 'to-deleted')), 'errChannelNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.ackChannel(AGENT, ch.id, 'MSG-1')), 'errChannelNotFound')
+                //被拒者不寫入任何表
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id, state: 'running' })).length, 1, '封存表之 running 任務維持原狀 (未被 respondTask 改寫)')
+            })
+        })
+
+        it('Q2: 空頻道 (無任務、無訊息) 刪除不多寫入、不報錯; 封存表仍空', async function() {
+            await withEnv('q2-empty', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'empty' }]))[0]
+                let f = installFaults(env.woItems)
+                try {
+                    f.arm(99)
+                    await env.pc.deleteChannel(ADMIN, ch.id)
+                    f.disarm()
+                    assert.deepStrictEqual(f.st.calls, ['channels.del'], '空頻道只刪頻道列')
+                }
+                finally {
+                    f.restore()
+                }
+                assert.strictEqual((await env.woItems.tasksArchive.select({})).length, 0)
+                assert.strictEqual((await env.woItems.messagesArchive.select({})).length, 0)
+            })
+        })
+
+        it('Q2 補償 (全有或全無): 搬移過程任一次寫入 (第 1～13 次; 含前 / 已生效後失敗) 失敗 → 補償後熱表與封存表與刪除前完全相同, reject saveRolledBack, 記 log; 無故障則成功', async function() {
+            await withEnv('q2-rb', async (env) => {
+                let { ch } = await seedBusy(env)
+                let before = await snapshot(env.woItems)
+                let f = installFaults(env.woItems)
+                try {
+                    for (let afterWrite of [false, true]) {
+                        for (let k = 1; k <= 13; k++) {
+                            env.logs.length = 0
+                            f.arm(k, false, afterWrite)
+                            let key = await rejKey(() => env.pc.deleteChannels(ADMIN, [ch.id]))
+                            f.disarm()
+                            assert.strictEqual(key, 'saveRolledBack', `第 ${k} 次寫入失敗 (afterWrite=${afterWrite})`)
+                            assert.deepStrictEqual(await snapshot(env.woItems), before, `第 ${k} 次失敗 (afterWrite=${afterWrite}) 後應完全還原 (含封存表)`)
+                            assert.ok(env.logs.some((l) => l.event === 'deleteChannels' && l.err === 'saveRolledBack'), '補償成功亦記 log')
+                        }
+                    }
+                    //第 14 次以後無寫入可失敗 → 成功 (確認 13 為全部寫入次數: 4 任務 × (冷表+熱表) + 訊息 (冷表+熱表) + 2 成員列 + 1 頻道列)
+                    f.arm(14)
+                    await env.pc.deleteChannels(ADMIN, [ch.id])
+                    f.disarm()
+                    assert.strictEqual(f.st.n, 13)
+                }
+                finally {
+                    f.restore()
+                }
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 4)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+            })
+        })
+
+        it('Q2 補償: 失敗後補償亦失敗 → saveWriteFail 並記 log (不假裝已還原); 單筆 API 與清單存檔 (集合差) 之補償範圍相同', async function() {
+            await withEnv('q2-rb2', async (env) => {
+                let { ch } = await seedBusy(env)
+                let f = installFaults(env.woItems)
+                try {
+                    env.logs.length = 0
+                    f.arm(10, true) //第 10 次 (訊息熱表整批刪除) 失敗, 其後所有寫入 (含補償) 皆失敗
+                    let key = await rejKey(() => env.pc.deleteChannel(ADMIN, ch.id))
+                    f.disarm()
+                    assert.strictEqual(key, 'saveWriteFail')
+                    assert.ok(env.logs.some((l) => l.err === 'saveWriteFail'), '補償失敗須記 log')
+                    assert.ok(env.logs.some((l) => /rollback-fail/.test(l.event)), '逐步補償失敗亦記 log')
+                }
+                finally {
+                    f.restore()
+                }
+            })
+            await withEnv('q2-rb3', async (env) => {
+                let { ch } = await seedBusy(env)
+                let A = await loadChannels(env)
+                let rows = JSON.parse(JSON.stringify(A.rows)).filter((r) => r.id !== ch.id)
+                let before = await snapshot(env.woItems)
+                let f = installFaults(env.woItems)
+                try {
+                    for (let k of [3, 9, 12, 13]) {
+                        f.arm(k)
+                        assert.strictEqual(await rejKey(() => env.pc.saveChannels(ADMIN, rows, { baseline: A.baseline })), 'saveRolledBack', `第 ${k} 次`)
+                        f.disarm()
+                        assert.deepStrictEqual(await snapshot(env.woItems), before, `saveChannels 第 ${k} 次失敗後完全還原`)
+                    }
+                }
+                finally {
+                    f.restore()
+                }
+            })
+        })
+
+        it('Q2 交錯: respondTask 進行中 (持 task:<id> 鎖, taskReply 寫入停住) 刪頻道須等待該任務鎖; 兩者皆完成後, 已完成之任務與其 taskReply 完整在封存表 (不複製到 running 前像, 熱表無殘留)', async function() {
+            await withEnv('q2-resp', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'q2r' }]))[0]
+                let t = (await env.pc.postMessage('human-1', ch.id, 'req', { asTask: true })).task
+                await env.pc.claimTask(AGENT, t.id)
+                let p = pauseOnce(env, 'messages', 'insert')
+                let pResp = env.pc.respondTask(AGENT, t.id, 'final-answer', 'done')
+                await p.reached
+                let done = false
+                let pDel = env.pc.deleteChannel(ADMIN, ch.id).then(() => {
+                    done = true
+                })
+                await sleep(150)
+                assert.strictEqual(done, false, 'respondTask 持任務鎖期間, 刪頻道 (搬該任務) 須等待')
+                p.release()
+                let rt = await pResp
+                await pDel
+                p.restore()
+                assert.strictEqual(rt.state, 'done', '進行中之 respondTask 先完成')
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+                let at = await env.woItems.tasksArchive.select({ id: t.id })
+                assert.strictEqual(at.length, 1)
+                assert.strictEqual(at[0].state, 'done', '封存表為 respondTask 完成後之終態 (非 running 前像)')
+                assert.strictEqual(at[0].result, 'final-answer')
+                let reply = (await env.woItems.messagesArchive.select({ channelId: ch.id })).filter((m) => m.kind === 'taskReply')
+                assert.strictEqual(reply.length, 1, 'taskReply 隨頻道移入封存表')
+                assert.strictEqual(at[0].resultMessageId, reply[0].id)
+            })
+        })
+
+        it('Q2 交錯: 刪頻道進行中 (任務已搬走, 停在搬訊息前) respondTask / claimTask / resetTask 皆得 errTaskNotFound, 不新增 taskReply 於熱表', async function() {
+            await withEnv('q2-mid', async (env) => {
+                let { ch, ids } = await seedBusy(env)
+                let p = pauseOnce(env, 'messages', 'select', (q) => q && q.channelId === ch.id) //opMoveMessages 讀該頻道訊息之前停住 (任務已全搬完)
+                let pDel = env.pc.deleteChannel(ADMIN, ch.id)
+                await p.reached
+                assert.strictEqual(await rejKey(() => env.pc.respondTask(AGENT, ids.run, 'x', 'done')), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.claimTask(AGENT, ids.pend)), 'errTaskNotFound')
+                assert.strictEqual(await rejKey(() => env.pc.resetTask(ADMIN, ids.err)), 'errTaskNotFound')
+                p.release()
+                await pDel
+                p.restore()
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0, '熱表不得因搬移期間之回應而殘留訊息')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 8)
+            })
+        })
+
+        it('Q2 與封存掃描: 任務已被 archiveSweep 搬走 → 刪頻道略過它 (封存表不重複、不報錯); 掃描與刪頻道並行 (60 個過齡任務 + 其訊息) 後每個任務 / 訊息恰在封存表一份、熱表無殘留', async function() {
+            await withEnv('q2-sweep', async (env) => {
+                const OLD = '2020-01-01T00:00:00.000+08:00'
+                let seedOld = async (ch, id) => {
+                    let t = ds.tasks.funNew({ channelId: ch.id, title: `t-${id}`, payload: 'p', state: 'error', userId: ADMIN })
+                    t.id = id
+                    t.timeDone = OLD
+                    t.errorKey = 'errX'
+                    await env.woItems.tasks.insert(t)
+                    let m = ds.messages.funNew({ channelId: ch.id, senderId: ADMIN, senderType: 'human', kind: 'task', content: `m-${id}`, taskId: id, userId: ADMIN })
+                    m.id = `m-${id}`
+                    m.timeCreate = OLD
+                    await env.woItems.messages.insert(m)
+                }
+                let ch = (await seedChannels(env, [{ name: 'q2s' }]))[0]
+                //(a) 確定性: 一個任務先被掃描搬走, 另一個仍在熱表
+                await seedOld(ch, 'T-A')
+                await seedOld(ch, 'T-B')
+                await env.woItems.tasks.save({ id: 'T-B', state: 'running', timeDone: '' }, { autoInsert: false }) //T-B 非終態: 掃描不搬
+                let r = await env.pc.archiveSweep(30)
+                assert.strictEqual(r.tasksMoved, 1)
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.deepStrictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).map((t) => t.id).sort(), ['T-A', 'T-B'])
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 2)
+
+                //(b) 壓力: 掃描與刪頻道並行
+                let ch2 = (await seedChannels(env, [{ name: 'q2s2' }])).find((c) => c.name === 'q2s2')
+                let ids = []
+                for (let i = 0; i < 60; i++) {
+                    ids.push(`P-${String(i).padStart(3, '0')}`)
+                    await seedOld(ch2, ids[i])
+                }
+                await Promise.all([env.pc.archiveSweep(30), env.pc.deleteChannel(ADMIN, ch2.id)])
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch2.id })).length, 0, '熱表無殘留任務')
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch2.id })).length, 0, '熱表無殘留訊息')
+                let at = (await env.woItems.tasksArchive.select({ channelId: ch2.id })).map((t) => t.id).sort()
+                assert.deepStrictEqual(at, ids, '60 個任務各在封存表一份 (不遺失、不重複)')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch2.id })).length, 60)
+            })
+        })
+
+        it('Q2 大量: 300 則訊息 + 40 個任務之頻道刪除成功 (整批搬移), 全數在封存表, 熱表無殘留', async function() {
+            await withEnv('q2-bulk', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'bulk' }]))[0]
+                for (let i = 0; i < 300; i++) {
+                    await env.pc.postMessage('human-1', ch.id, `m-${i}`, { asTask: i < 40 })
+                }
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 300)
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 300)
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 40)
+            })
+        })
+
+        it('Q2 封存表寫入回 ok:0 (ORM 對單筆失敗不 reject) → 視為失敗: 不刪熱表 (不遺失資料)、整次補償 saveRolledBack, 庫內完全還原 —— 任務冷表與訊息冷表各一輪', async function() {
+            await withEnv('q2-ok0', async (env) => {
+                let { ch } = await seedBusy(env)
+                let before = await snapshot(env.woItems)
+                for (let tab of ['tasksArchive', 'messagesArchive']) {
+                    let orig = env.woItems[tab].save
+                    //任務冷表: 單筆全 ok:0; 訊息冷表: 整批中第 1 筆 ok:1、其餘 ok:0 (混合結果, 批次部分生效)
+                    env.woItems[tab].save = async (data) => (Array.isArray(data) ? data : [data]).map((_, i) => ({ n: 1, nInserted: 0, nModified: 0, ok: (tab === 'messagesArchive' && i === 0) ? 1 : 0, err: 'single-fail' }))
+                    let key = await rejKey(() => env.pc.deleteChannel(ADMIN, ch.id))
+                    env.woItems[tab].save = orig
+                    assert.strictEqual(key, 'saveRolledBack', `${tab}.save 回 ok:0`)
+                    assert.deepStrictEqual(await snapshot(env.woItems), before, `${tab}.save 回 ok:0 後應完全還原 (熱表不得被刪)`)
+                }
+            })
+        })
+
+        it('Q2 熱表刪除回 ok:0 / 熱表刪除未命中 (任務於鎖內已確認存在, 未命中代表鎖紀律被破壞) → 視為失敗並補償, 不留矛盾 (冷熱並存)', async function() {
+            await withEnv('q2-del0', async (env) => {
+                let { ch } = await seedBusy(env)
+                let before = await snapshot(env.woItems)
+                let orig = env.woItems.tasks.del
+                //兩種回傳: 命中 0 (ok:1, n:0) 與單筆失敗 (ok:0)
+                for (let res of [{ n: 0, nDeleted: 0, ok: 1 }, { n: 1, nDeleted: 0, ok: 0, err: 'single-fail' }]) {
+                    env.woItems.tasks.del = async (q) => (Array.isArray(q) ? q : [q]).map(() => ({ ...res }))
+                    let key = await rejKey(() => env.pc.deleteChannel(ADMIN, ch.id))
+                    env.woItems.tasks.del = orig
+                    assert.strictEqual(key, 'saveRolledBack', JSON.stringify(res))
+                    assert.deepStrictEqual(await snapshot(env.woItems), before, `補償後完全還原 (封存表之複本撤回): ${JSON.stringify(res)}`)
+                }
+            })
+        })
+
+        it('Q2 頻道列最後刪: 搬移中途硬失敗且補償亦失敗 (saveWriteFail, 行程崩潰之等價) → 頻道列仍在 (不留「頻道已刪而訊息 / 任務仍在熱表」之孤兒); 故障排除後重試補完, 封存表不重複、熱表無殘留', async function() {
+            await withEnv('q2-last', async (env) => {
+                let { ch } = await seedBusy(env)
+                let f = installFaults(env.woItems)
+                try {
+                    f.arm(3, true) //第 3 次寫入 (第 2 個任務之冷表寫入) 失敗, 其後所有寫入 (含補償) 皆失敗 → 停在半途
+                    assert.strictEqual(await rejKey(() => env.pc.deleteChannel(ADMIN, ch.id)), 'saveWriteFail')
+                    f.disarm()
+                }
+                finally {
+                    f.restore()
+                }
+                assert.strictEqual((await env.woItems.channels.select({ id: ch.id })).length, 1, '半途中斷時頻道列仍在 (頻道列最後刪)')
+                //重試補完
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 4, '4 個任務各在封存表一份')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 8)
+                assert.strictEqual((await env.woItems.channels.select({ id: ch.id })).length, 0)
+            })
+        })
+
+        it('Q2 多頻道頻道列最後刪 (外審 sol#5): deleteChannels([A, B]) 搬到 B 時中斷 (硬失敗且補償亦失敗) → A、B 之頻道列皆仍在 (A 之引用已搬、B 之引用在熱表); 原請求重送即補完, 封存表不重複、熱表無殘留', async function() {
+            await withEnv('q2-multi', async (env) => {
+                let [A, B] = await seedChannels(env, [{ name: 'mA' }, { name: 'mB' }])
+                for (let c of [A, B]) {
+                    await env.pc.postMessage('human-1', c.id, `task-of-${c.name}`, { asTask: true })
+                }
+                let f = installFaults(env.woItems)
+                try {
+                    f.arm(6, true) //A 之搬移 4 次寫入 (任務 2 + 訊息 2) 完成後, B 之第 2 次寫入 (任務之熱表刪除) 失敗, 其後所有寫入 (含補償) 皆失敗; 若頻道列隨各頻道搬移後即刪, 第 5 次寫入即刪掉 A 之頻道列
+                    assert.strictEqual(await rejKey(() => env.pc.deleteChannels(ADMIN, [A.id, B.id])), 'saveWriteFail')
+                    f.disarm()
+                }
+                finally {
+                    f.restore()
+                }
+                assert.strictEqual((await env.woItems.channels.select({ id: A.id })).length, 1, 'A 之頻道列仍在')
+                assert.strictEqual((await env.woItems.channels.select({ id: B.id })).length, 1, 'B 之頻道列仍在')
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: A.id })).length, 1, 'A 之任務已搬')
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: B.id })).length, 1, 'B 之任務仍在熱表 (冷表已寫、熱表刪除失敗: 冷熱並存之中間態)')
+                //原請求 (同一組 ids) 重送即補完
+                let r = await env.pc.deleteChannels(ADMIN, [A.id, B.id])
+                assert.deepStrictEqual(r.deleted.sort(), [A.id, B.id].sort())
+                for (let c of [A, B]) {
+                    assert.strictEqual((await env.woItems.tasks.select({ channelId: c.id })).length, 0)
+                    assert.strictEqual((await env.woItems.messages.select({ channelId: c.id })).length, 0)
+                    assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: c.id })).length, 1, '封存表不重複')
+                    assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: c.id })).length, 1)
+                    assert.strictEqual((await env.woItems.channels.select({ id: c.id })).length, 0)
+                }
+            })
+        })
+
+        it('Q2 補償不刪「搬移前冷表原有」之列 (外審 sol#3): 中斷後重試遇冷熱並存之殘留, 重試再失敗 → 補償後庫內與重試前完全相同 (冷表原有列保留)', async function() {
+            await withEnv('q2-preexist', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'pre' }]))[0]
+                await env.pc.postMessage('human-1', ch.id, 'm1', { asTask: true })
+                await env.pc.postMessage('human-1', ch.id, 'm2')
+                //模擬先前行程於「冷表已寫、熱表尚未刪」中斷: 任務與訊息在冷熱兩表並存
+                for (let t of await env.woItems.tasks.select({ channelId: ch.id })) {
+                    await env.woItems.tasksArchive.save(t)
+                }
+                await env.woItems.messagesArchive.save(await env.woItems.messages.select({ channelId: ch.id }))
+                let before = await snapshot(env.woItems)
+                assert.strictEqual(before.tasksArchive.length, 1)
+                assert.strictEqual(before.messagesArchive.length, 2)
+                let f = installFaults(env.woItems)
+                try {
+                    for (let k = 1; k <= 5; k++) { //任務 2 + 訊息 2 + 頻道列 1
+                        f.arm(k)
+                        assert.strictEqual(await rejKey(() => env.pc.deleteChannel(ADMIN, ch.id)), 'saveRolledBack', `第 ${k} 次`)
+                        f.disarm()
+                        assert.deepStrictEqual(await snapshot(env.woItems), before, `第 ${k} 次失敗後: 冷表原有列須保留、熱表還原`)
+                    }
+                }
+                finally {
+                    f.restore()
+                }
+                //故障排除後重試成功: 每個任務與訊息各在冷表一份、熱表無
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 1)
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 2)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+            })
+        })
+
+        //外審 sol#1 / #2: 補償 (補回熱表 → 刪冷表複本) 與封存掃描交錯. 於補償之「刪冷表複本」前以閘門停住, 此時熱表已補回、冷表複本尚在; 掃描於此時啟動:
+        //補償與搬移對稱地持鎖 (任務 task:<id>、訊息 msgarch:<channelId>) → 掃描須等補償完成才搬 (終態: 任務 / 訊息恰在一處); 補償若不持鎖則掃描先搬走, 其後補償刪掉冷表複本 → 兩表皆無
+        const OLD = '2020-01-01T00:00:00.000+08:00'
+        for (let kind of ['task', 'message']) {
+            it(`Q2 補償 × 封存掃描 (${kind === 'task' ? '任務, task:<id> 鎖' : '訊息, msgarch:<頻道> 鎖'}): 刪頻道失敗之補償進行中掃描啟動 → 過齡${kind === 'task' ? '任務' : '訊息'}恰在冷熱兩表之一處 (不兩表皆無)`, async function() {
+                await withEnv(`q2-undo-sweep-${kind}`, async (env) => {
+                    let ch = (await seedChannels(env, [{ name: `q2u-${kind}` }]))[0]
+                    if (kind === 'task') {
+                        let t = ds.tasks.funNew({ channelId: ch.id, title: 't', payload: 'p', state: 'error', userId: ADMIN })
+                        t.id = 'T-OLD'
+                        t.timeDone = OLD
+                        t.errorKey = 'errX'
+                        await env.woItems.tasks.insert(t)
+                    }
+                    else {
+                        let m = ds.messages.funNew({ channelId: ch.id, senderId: ADMIN, senderType: 'human', kind: 'text', content: 'old-msg', userId: ADMIN })
+                        m.id = 'M-OLD'
+                        m.timeCreate = OLD
+                        await env.woItems.messages.insert(m)
+                    }
+                    let tabHot = kind === 'task' ? 'tasks' : 'messages'
+                    let tabCold = kind === 'task' ? 'tasksArchive' : 'messagesArchive'
+                    let f = installFaults(env.woItems)
+                    let p = null
+                    try {
+                        f.arm(3) //寫入: 1 冷表寫入、2 熱表刪除、3 頻道列刪除 (失敗) → 補償
+                        p = pauseOnce(env, tabCold, 'del') //補償之冷表複本刪除 (本流程唯一之 del 呼叫) 前停住
+                        let pDel = rejKey(() => env.pc.deleteChannel(ADMIN, ch.id))
+                        await p.reached
+                        assert.strictEqual((await env.woItems[tabHot].select({ channelId: ch.id })).length, 1, '前置: 此刻熱表已補回')
+                        assert.strictEqual((await env.woItems[tabCold].select({ channelId: ch.id })).length, 1, '前置: 此刻冷表複本尚在')
+                        let pSweep = env.pc.archiveSweep(30)
+                        await sleep(200)
+                        p.release()
+                        assert.strictEqual(await pDel, 'saveRolledBack')
+                        await pSweep
+                    }
+                    finally {
+                        if (p) { p.restore() }
+                        f.restore()
+                    }
+                    let nHot = (await env.woItems[tabHot].select({ channelId: ch.id })).length
+                    let nCold = (await env.woItems[tabCold].select({ channelId: ch.id })).length
+                    assert.strictEqual(nHot + nCold, 1, `${kind} 應恰在冷熱兩表之一處 (熱 ${nHot} / 冷 ${nCold}); 兩表皆無 = 資料遺失`)
+                    assert.strictEqual((await env.woItems.channels.select({ id: ch.id })).length, 1, '頻道列已補償還原')
+                })
+            })
+        }
+
+        it('Q2 log 之 messagesMoved 為實際搬移筆數 (外審 sol#6): 封存掃描正持 msgarch 鎖搬該過齡訊息時刪頻道須等待, 之後該訊息已在冷表, 不重複計入; 冷表恰一份', async function() {
+            await withEnv('q2-count', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'q2n' }]))[0]
+                let m = ds.messages.funNew({ channelId: ch.id, senderId: ADMIN, senderType: 'human', kind: 'text', content: 'old-msg', userId: ADMIN })
+                m.id = 'M-OLD'
+                m.timeCreate = OLD
+                await env.woItems.messages.insert(m)
+                let p = pauseOnce(env, 'messagesArchive', 'save') //掃描之冷表寫入前停住 (持 msgarch 鎖; 熱表仍有該訊息)
+                let pSweep = env.pc.archiveSweep(30)
+                await p.reached
+                env.infos.length = 0
+                let pDel = env.pc.deleteChannel(ADMIN, ch.id)
+                await sleep(200)
+                p.release()
+                await pSweep
+                await pDel
+                p.restore()
+                let lg = env.infos.find((l) => l.event === 'channelArchived' && l.channelId === ch.id)
+                assert.ok(lg)
+                assert.strictEqual(lg.messagesMoved, 0, '該訊息已由掃描搬走, 刪頻道實際搬移 0 筆 (無鎖則讀到尚在熱表之該訊息而重複計為 1)')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 1)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0)
+            })
+        })
+
+        it('Q2 交錯: claimTask 進行中 (持 task:<id> 鎖, 任務狀態寫入停住) 刪頻道須等待; 完成後封存表為認領後之 running (不複製到 pending 前像), 熱表無殘留', async function() {
+            await withEnv('q2-claim', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'q2c' }]))[0]
+                let t = (await env.pc.postMessage('human-1', ch.id, 'req', { asTask: true })).task
+                let p = pauseOnce(env, 'tasks', 'save')
+                let pClaim = env.pc.claimTask(AGENT, t.id)
+                await p.reached
+                let done = false
+                let pDel = env.pc.deleteChannel(ADMIN, ch.id).then(() => {
+                    done = true
+                })
+                await sleep(150)
+                assert.strictEqual(done, false, 'claimTask 持任務鎖期間, 刪頻道須等待')
+                p.release()
+                let ct = await pClaim
+                await pDel
+                p.restore()
+                assert.strictEqual(ct.state, 'running')
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                let at = await env.woItems.tasksArchive.select({ id: t.id })
+                assert.strictEqual(at.length, 1)
+                assert.strictEqual(at[0].state, 'running', '封存表為認領完成後之狀態')
+                assert.strictEqual(at[0].assigneeId, AGENT)
+            })
+        })
+
+        it('Q2 無條件整列搬移: 熱表中 isActive 為 n 之訊息與任務 (讀取介面不顯示) 亦隨頻道移入封存表, 不留孤兒', async function() {
+            await withEnv('q2-inactive', async (env) => {
+                let ch = (await seedChannels(env, [{ name: 'q2i' }]))[0]
+                await env.pc.postMessage('human-1', ch.id, 'visible', { asTask: true })
+                let t = ds.tasks.funNew({ channelId: ch.id, title: 'hidden-task', payload: 'p', state: 'done', userId: ADMIN })
+                t.isActive = 'n'
+                await env.woItems.tasks.insert(t)
+                let m = ds.messages.funNew({ channelId: ch.id, senderId: ADMIN, senderType: 'human', kind: 'text', content: 'hidden-msg', userId: ADMIN })
+                m.isActive = 'n'
+                await env.woItems.messages.insert(m)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 2)
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0, '含 isActive n 之任務不殘留')
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0, '含 isActive n 之訊息不殘留')
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 2)
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 2)
+            })
+        })
+
+        it('Q2 重試補完: 中斷後 (任務已搬走一部分、頻道仍在) 再刪一次 → 補完, 封存表不重複', async function() {
+            await withEnv('q2-resume', async (env) => {
+                let { ch, ids } = await seedBusy(env)
+                //模擬行程於搬移中途中斷: 手動搬走 2 個任務 (先冷表、再刪熱表), 頻道仍在
+                for (let id of [ids.pend, ids.done]) {
+                    let t = (await env.woItems.tasks.select({ id }))[0]
+                    await env.woItems.tasksArchive.save(t)
+                    await env.woItems.tasks.del({ id })
+                }
+                await env.pc.deleteChannel(ADMIN, ch.id)
+                assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0)
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 4, '4 個任務各在封存表一份')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 8)
             })
         })
     })
@@ -1177,30 +1744,6 @@ describe('unit-procCoreConcurrency', function() {
     // ── 外審補驗 (sol / beam 審查所列交錯與硬失敗缺格) ─────────────────────────────────────────
     describe('外審補驗: 交錯 (ack / 刪除 / 改名 / postMessage)、封存失敗、型別、成員內容衝突、硬失敗矩陣', function() {
 
-        //pauseOnce: 在 woItems[tab][method] 第一次符合 match 之呼叫前停住 (人為延遲; 以閘門放行). 回 { reached, release, restore }
-        function pauseOnce(env, tab, method, match = () => true) {
-            let g = gate()
-            let reached = gate()
-            let t = env.woItems[tab]
-            let orig = t[method]
-            let hit = false
-            t[method] = async (...a) => {
-                if (!hit && match(...a)) {
-                    hit = true
-                    reached.open()
-                    await g.promise
-                }
-                return orig.apply(t, a)
-            }
-            return {
-                reached: reached.promise,
-                release: g.open,
-                restore: () => {
-                    t[method] = orig
-                }
-            }
-        }
-
         const OLD = '2020-01-01T00:00:00.000+08:00'
         async function seedOldTask(env, ch, id) {
             let t = ds.tasks.funNew({ channelId: ch.id, title: `t-${id}`, payload: 'p', state: 'error', userId: ADMIN })
@@ -1315,7 +1858,7 @@ describe('unit-procCoreConcurrency', function() {
 
 
         // ── postMessage 與刪頻道交錯 ──
-        it('postMessage 與 deleteChannels 交錯 (一): 發訊寫入期間 (持 channels 表鎖) 刪頻道須等待; 兩者皆完成, 訊息維持 (待裁示 Q2)', async function() {
+        it('postMessage 與 deleteChannels 交錯 (一): 發訊寫入期間 (持 channels 表鎖) 刪頻道須等待; 兩者皆完成, 該訊息隨頻道移入封存表 (Q2)', async function() {
             await withEnv('pmdel1', async (env) => {
                 let ch = (await seedChannels(env, [{ name: 'pm1' }]))[0]
                 let p = pauseOnce(env, 'messages', 'insert')
@@ -1332,7 +1875,8 @@ describe('unit-procCoreConcurrency', function() {
                 await pDel
                 p.restore()
                 assert.strictEqual((await env.woItems.channels.select({ id: ch.id })).length, 0)
-                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 1)
+                assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0, '發訊完成後刪頻道: 熱表不得殘留該訊息')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 1, '該訊息在封存表')
             })
         })
 
@@ -1350,6 +1894,8 @@ describe('unit-procCoreConcurrency', function() {
                 assert.strictEqual(await pPost, 'errChannelNotFound')
                 assert.strictEqual((await env.woItems.messages.select({ channelId: ch.id })).length, 0, '不得有孤兒訊息')
                 assert.strictEqual((await env.woItems.tasks.select({ channelId: ch.id })).length, 0, '不得有孤兒任務')
+                assert.strictEqual((await env.woItems.messagesArchive.select({ channelId: ch.id })).length, 0, '被拒之發訊不得進封存表')
+                assert.strictEqual((await env.woItems.tasksArchive.select({ channelId: ch.id })).length, 0, '被拒之任務不得進封存表')
             })
         })
 

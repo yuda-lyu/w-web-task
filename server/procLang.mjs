@@ -668,9 +668,9 @@ let kpLang = {
         eng: 'Please correct the channel name first',
         cht: '請先修正頻道名稱',
     },
-    deleteChannelConfirm: {
-        eng: 'Are you sure you want to delete the selected channels?',
-        cht: '確定要刪除所選頻道嗎？',
+    deleteChannelConfirm: { //提示: 刪頻道時該頻道之訊息與任務移入封存表 (Q2, 使用者 2026-10-23 裁示); 進行中之任務亦一併移入, 之後不可再認領 / 回應
+        eng: 'Are you sure you want to delete the selected channels? Their messages and tasks (including unfinished ones) will be moved to the archive and can no longer be claimed or answered.',
+        cht: '確定要刪除所選頻道嗎？頻道內之訊息與任務（含進行中者）將一併移入封存，且不可再認領或回應。',
     },
 
     //後台清單頁之草稿保護 (多人同時編輯, 原則 10; 頻道頁、成員頁共用)

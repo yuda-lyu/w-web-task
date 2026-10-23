@@ -131,7 +131,7 @@
             <div
                 data-fmid="draft-stale-notice"
                 style="padding:6px 14px; background:#FFE0B2; color:#444; font-size:0.8rem; display:flex; align-items:center; border-top:1px solid #ddd;"
-                v-if="isEditable && isModified && staleNotice"
+                v-if="isEditable && (isModified || editDefer) && staleNotice"
             >
                 <img style="width:16px; height:16px; flex:none;" :src="$ui.getIcon('warning')" />
                 <span style="padding:0px 10px 0px 6px;">{{$t('draftStaleNotice')}}</span>
@@ -214,7 +214,8 @@ import WButtonCircle from 'w-component-vue/src/components/WButtonCircle.vue'
 import WButtonChip from 'w-component-vue/src/components/WButtonChip.vue'
 import WAggridVue from 'w-aggrid-vue/src/components/WAggridVue.vue'
 import channelsContract from '../schema/contracts/channels.mjs'
-import { isStaleKey, calcBaseline, isStale, isDirty, decidePush, removeFromBaseline } from '../plugins/mDraft.mjs'
+import { isStaleKey, calcBaseline, isStale, isDirty, resolveModified, decidePush, removeFromBaseline } from '../plugins/mDraft.mjs'
+import { isEditorOpen, onceEditorStopped } from '../plugins/mGridEdit.mjs'
 
 
 export default {
@@ -254,6 +255,9 @@ export default {
             ownWriting: false,
             pendingRebuild: false,
 
+            //editDefer: 儲存格編輯器開啟中 (已輸入、未按 Enter) 時收到推播, 視同草稿而延後處理 (不重建, 提示條照 staleNotice 顯示); 編輯器關閉後依一般規則處理 (見 plugins/mGridEdit.mjs)
+            editDefer: false,
+
             aError: '',
 
             tabKeys: [
@@ -280,6 +284,9 @@ export default {
             vo.firstSetting = false
         }, 1)
 
+    },
+    beforeDestroy: function() {
+        this.clearEditorWatch()
     },
     watch: {
 
@@ -406,6 +413,7 @@ export default {
             vo.items = cloneDeep(rows)
             vo.staleNotice = false
             vo.pendingRebuild = false
+            vo.clearEditorWatch()
             vo.genOpt()
             vo.firstLoading = false
         },
@@ -419,7 +427,13 @@ export default {
         //onStorePush: store.channels 變更時之處置 (規則見 plugins/mDraft.mjs decidePush)
         onStorePush: function() {
             let vo = this
-            let d = decidePush({ isModified: vo.isModified, ownWriting: vo.ownWriting, baseline: vo.baseline, rows: vo.channels, contract: channelsContract })
+            //editing: 編輯器開啟中, 或已掛接關閉監聽而停止事件尚未回呼 (editDefer); modified: 旗標或畫面列內容 (提交後 rowsChange 回呼前之空窗以內容重算, 見 mDraft.resolveModified)
+            let editing = vo.editDefer || isEditorOpen(vo.$refs.rftable)
+            let modified = vo.opt ? resolveModified(vo.isModified, get(vo, 'opt.rows', []), vo.baseline, channelsContract) : vo.isModified
+            if (modified && !vo.isModified) {
+                vo.isModified = true
+            }
+            let d = decidePush({ isModified: modified, isEditing: editing, ownWriting: vo.ownWriting, baseline: vo.baseline, rows: vo.channels, contract: channelsContract })
             if (d.action === 'rebuild') {
                 vo.rebuildFromStore()
             }
@@ -427,8 +441,44 @@ export default {
                 vo.pendingRebuild = true //自身存檔 / 刪除期間之推播視為己寫, 結束後處理
             }
             else {
-                vo.staleNotice = d.stale //有未存修改: 不重建, 內容不同才提示
+                vo.staleNotice = d.stale //有未存修改或編輯器開啟中: 不重建, 內容不同才提示
+                if (editing && !vo.isModified) {
+                    vo.watchEditorStop() //僅編輯器開啟 (輸入未提交): 關閉後再依一般規則處理
+                }
             }
+        },
+
+        //watchEditorStop: 編輯器開啟中收到推播而延後處理時, 掛接「編輯器關閉」一次性監聽 (已掛接或無法掛接則不重複 / 不進入延後狀態)
+        watchEditorStop: function() {
+            let vo = this
+            if (vo.editDefer) {
+                return
+            }
+            let dispose = onceEditorStopped(vo.$refs.rftable, () => vo.onEditorStopped())
+            if (dispose) {
+                vo.editDefer = true
+                vo.disposeEditorWatch = dispose
+            }
+        },
+
+        //clearEditorWatch: 取消編輯器關閉監聽並結束延後狀態 (重建畫面 / 元件銷毀時)
+        clearEditorWatch: function() {
+            let vo = this
+            if (vo.disposeEditorWatch) {
+                vo.disposeEditorWatch()
+                vo.disposeEditorWatch = null
+            }
+            vo.editDefer = false
+        },
+
+        //onEditorStopped: 編輯器關閉 (Enter 提交 / Esc 取消 / 點他處): 先以內容重算 isModified (提交之值已在列資料, 不等 rowsChange), 再依一般規則處理延後之推播 ——
+        //有未存修改 → 草稿保留並依內容差異提示; 無 → 重建為最新資料
+        onEditorStopped: function() {
+            let vo = this
+            vo.disposeEditorWatch = null
+            vo.editDefer = false
+            vo.isModified = isDirty(get(vo, 'opt.rows', []), vo.baseline, channelsContract)
+            vo.onStorePush()
         },
 
         //onEditableChange: 切換編輯模式. 有未存修改時保留草稿 (只重產 grid 設定), 否則自 store 重建
@@ -461,6 +511,9 @@ export default {
 
             //default
             vo.itemsCheck = []
+
+            //genOpt 必產生新的 grid 設定 (編輯器隨之關閉): 取消編輯器關閉監聽並結束延後狀態, 不留 editDefer 卡住
+            vo.clearEditorWatch()
 
             //opt
             let opt = null

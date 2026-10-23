@@ -6,7 +6,7 @@ import { buildBaseline } from 'w-serv-orm/src/baseline.mjs'
 //草稿保護之純邏輯 (多人同時編輯, 原則 10; 規格 dspec/多人同時編輯之寫入契約.md §8). 與 Vue 無關, 可單元測試 (test/unit-draft.test.mjs).
 //後台清單頁 (LayoutContentChannels / LayoutContentMembers) 的規則:
 //  ①載入時以「畫面所見之同一份列」自算基準並凍結 (buildBaseline + 共用契約), 存檔送此基準, 不用編輯後之列重算;
-//  ②有未存修改時收到推播: 不重建編輯中之內容, 基準維持凍結, 顯示「資料已被他人更新」提示 (內容全同之推播不誤報);
+//  ②有未存修改時收到推播: 不重建編輯中之內容, 基準維持凍結, 顯示「資料已被他人更新」提示 (內容全同之推播不誤報); 儲存格編輯器開啟中 (已輸入未按 Enter) 視同有未存修改 (mGridEdit.mjs), 編輯器關閉後依一般規則處理;
 //  ③自身存檔期間到達之推播視為己寫 (延後, 不當他人更新);
 //  ④存檔成功後之新基準取自伺服端 (回傳之列), 不得以送出值當新基準 (寫入時 clearXSS 等會改寫字串, 以送出值為基準下次存檔會被自己誤拒);
 //  ⑤存檔被拒 (saveStale 等) 保留草稿, 提示重新載入.
@@ -46,14 +46,15 @@ function isStale(rows, baseline, contract) {
 
 
 //decidePush: 推播 (或引用表重建觸發) 到達時之處置.
-//  ownWriting      → defer   自身存檔期間之推播視為己寫, 延後 (存檔結束後由回傳之列重建)
-//  無未存修改      → rebuild 照舊重建
-//  有未存修改      → keep    不重建編輯中之內容; stale 為目前列相對凍結基準是否不同 (內容全同之推播不顯示提示)
-function decidePush({ isModified, ownWriting, baseline, rows, contract }) {
+//  ownWriting                → defer   自身存檔期間之推播視為己寫, 延後 (存檔結束後由回傳之列重建)
+//  無未存修改且編輯器未開啟  → rebuild 照舊重建
+//  有未存修改 或 編輯器開啟中 → keep    不重建編輯中之內容; stale 為目前列相對凍結基準是否不同 (內容全同之推播不顯示提示)
+//isEditing: 儲存格編輯器開啟中 (已輸入、尚未提交; 見 mGridEdit.mjs). 輸入尚未進列資料, isModified 看不到, 但視同草稿: 重建會關閉編輯器使輸入靜默丟失 (task-verify01 N1)
+function decidePush({ isModified, isEditing, ownWriting, baseline, rows, contract }) {
     if (ownWriting) {
         return { action: 'defer', stale: false }
     }
-    if (!isModified) {
+    if (!isModified && !isEditing) {
         return { action: 'rebuild', stale: false }
     }
     return { action: 'keep', stale: isStale(rows, baseline, contract) }
@@ -71,6 +72,14 @@ function isDirty(rows, baseline, contract) {
     catch (err) {
         return true
     }
+}
+
+
+//resolveModified: 是否有未存修改 —— 旗標 flag (isModified) 為真, 或畫面列相對凍結基準已不同. 使用者於編輯器按 Enter 提交後, 值已寫入列資料,
+//但 grid 之 rowsChange / cellEditingStopped 皆為非同步事件 (ag-grid 以 setTimeout 派送), 回呼前之空窗旗標尚未更新; 此時收到推播若只看旗標會當作「無草稿」而重建, 使剛提交之修改丟失.
+//故推播處置前以列內容重算 (與 rowsChange 設定旗標同一判準 isDirty). 外審 sol#4 (task-run02)
+function resolveModified(flag, rows, baseline, contract) {
+    return !!flag || isDirty(rows, baseline, contract)
 }
 
 
@@ -101,4 +110,4 @@ function removeFromBaseline(baseline, ids) {
 }
 
 
-export { STALE_KEYS, isStaleKey, calcBaseline, sameBaseline, isStale, isDirty, countDuplicates, decidePush, removeFromBaseline }
+export { STALE_KEYS, isStaleKey, calcBaseline, sameBaseline, isStale, isDirty, resolveModified, countDuplicates, decidePush, removeFromBaseline }

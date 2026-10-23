@@ -162,7 +162,7 @@
             <div
                 data-fmid="draft-stale-notice"
                 style="padding:6px 14px; background:#FFE0B2; color:#444; font-size:0.8rem; display:flex; align-items:center; border-top:1px solid var(--border);"
-                v-if="isEditable && isModified && staleNotice"
+                v-if="isEditable && (isModified || editDefer) && staleNotice"
             >
                 <img style="width:16px; height:16px; flex:none;" :src="$ui.getIcon('warning')" />
                 <span style="padding:0px 10px 0px 6px;">{{$t('draftStaleNotice')}}</span>
@@ -258,6 +258,7 @@ import WTextSelect from 'w-component-vue/src/components/WTextSelect.vue'
 import WAggridVue from 'w-aggrid-vue/src/components/WAggridVue.vue'
 import getMembersContract from '../schema/contracts/channelMembers.mjs'
 import { isStaleKey, calcBaseline, isStale, isDirty, countDuplicates, removeFromBaseline } from '../plugins/mDraft.mjs'
+import { isEditorOpen, onceEditorStopped } from '../plugins/mGridEdit.mjs'
 
 
 export default {
@@ -304,6 +305,9 @@ export default {
             ownWriting: false,
             pendingPush: false,
 
+            //editDefer: 儲存格編輯器開啟中 (已輸入、未按 Enter) 時收到推播, 視同草稿 (提示條照 staleNotice 顯示); 編輯器關閉後依一般規則處理 (見 plugins/mGridEdit.mjs)
+            editDefer: false,
+
             //loadSeq: 載入世代 (每次載入 / 存檔成功遞增; 回應到達時世代已變即捨棄, 防 A→B→A 之舊回應覆蓋新畫面與草稿);
             //selectKey: 頻道選擇器重掛鍵 (有草稿而取消切換頻道時, 使選擇器回到目前頻道)
             loadSeq: 0,
@@ -342,6 +346,9 @@ export default {
             vo.loadMembers()
         }
 
+    },
+    beforeDestroy: function() {
+        this.clearEditorWatch()
     },
     watch: {
         channelItems: {
@@ -492,6 +499,7 @@ export default {
             }
             vo.baseline = baseline
             vo.staleNotice = false
+            vo.clearEditorWatch()
             vo.membersLocal = rs
             vo.rebuildFromLocal()
         },
@@ -519,18 +527,56 @@ export default {
             }
         },
 
-        //onStorePush: store.channelMembers 變更. 自身存檔 / 刪除進行中視為己寫不處理; 有未存修改時依內容差異提示他人已更新 (內容全同不提示)
+        //onStorePush: store.channelMembers 變更. 自身存檔 / 刪除進行中視為己寫不處理; 有未存修改或儲存格編輯器開啟中 (已輸入未按 Enter, 視同草稿) 時依內容差異提示他人已更新 (內容全同不提示)
         onStorePush: function() {
             let vo = this
             if (vo.ownWriting) {
                 vo.pendingPush = true //己寫期間之推播延後, 結束後視需要重算
                 return
             }
-            if (!vo.isModified) {
+            //editing: 編輯器開啟中, 或已掛接關閉監聽而停止事件尚未回呼 (editDefer; 提交後事件回呼前之空窗仍視為編輯中). 成員頁不隨推播重建, 空窗內旗標尚未更新只影響提示條之顯示 (rowsChange 回呼後即依內容重算)
+            let editing = vo.editDefer || isEditorOpen(vo.$refs.rftable)
+            if (!vo.isModified && !editing) {
                 vo.staleNotice = false //無未存修改: 不顯示提示條 (其後再有修改時 rowsChange 會依 store 內容重算)
                 return
             }
             vo.staleNotice = isStale(vo.storeMembers, vo.baseline, vo.membersContract)
+            if (editing && !vo.isModified) {
+                vo.watchEditorStop() //僅編輯器開啟 (輸入未提交): 關閉後再依一般規則處理
+            }
+        },
+
+        //watchEditorStop: 編輯器開啟中收到推播時, 掛接「編輯器關閉」一次性監聽 (已掛接或無法掛接則不重複 / 不進入延後狀態)
+        watchEditorStop: function() {
+            let vo = this
+            if (vo.editDefer) {
+                return
+            }
+            let dispose = onceEditorStopped(vo.$refs.rftable, () => vo.onEditorStopped())
+            if (dispose) {
+                vo.editDefer = true
+                vo.disposeEditorWatch = dispose
+            }
+        },
+
+        //clearEditorWatch: 取消編輯器關閉監聽並結束延後狀態 (重新載入 / 元件銷毀時)
+        clearEditorWatch: function() {
+            let vo = this
+            if (vo.disposeEditorWatch) {
+                vo.disposeEditorWatch()
+                vo.disposeEditorWatch = null
+            }
+            vo.editDefer = false
+        },
+
+        //onEditorStopped: 編輯器關閉 (Enter 提交 / Esc 取消 / 點他處): 先以內容重算 isModified (提交之值已在列資料, 不等 rowsChange), 再依一般規則處理 ——
+        //有未存修改 → 草稿保留並依內容差異提示; 無 → 不顯示提示條 (成員頁不隨推播自動重載, 沿用既有行為)
+        onEditorStopped: function() {
+            let vo = this
+            vo.disposeEditorWatch = null
+            vo.editDefer = false
+            vo.isModified = isDirty(get(vo, 'opt.rows', []), vo.baseline, vo.membersContract)
+            vo.onStorePush()
         },
 
         //onClickReload: 捨棄草稿並重新載入 (確認後)
@@ -552,6 +598,9 @@ export default {
 
             //default
             vo.itemsCheck = []
+
+            //genOpt 必產生新的 grid 設定 (編輯器隨之關閉): 取消編輯器關閉監聽並結束延後狀態, 不留 editDefer 卡住
+            vo.clearEditorWatch()
 
             //opt
             let opt = null

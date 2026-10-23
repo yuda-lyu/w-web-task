@@ -4,7 +4,7 @@
 
 | 分冊 | 收錄 |
 |---|---|
-| `rulebook_concurrency.md`(本檔) | 摘要、規則總表(R-CONC-01～14 現況)、第 8 節(本輪決定與待裁示, inv01 原文)、**第 9 節 第二波實作現況**(站點對照、V1～V14 對照、變異驗證、修前紅、外審、已知不修與待裁示、改動範圍 → 測試對照) |
+| `rulebook_concurrency.md`(本檔) | 摘要、規則總表(R-CONC-01～15 現況)、第 8 節(本輪決定與待裁示, inv01 原文)、**第 9 節 第二波實作現況**(站點對照、V1～V14 對照、變異驗證、修前紅、外審、已知不修與待裁示、改動範圍 → 測試對照) |
 | `rulebook_concurrency_inventory.md` | 第 1 節欄位三分類、第 2 節業務函式與寫入者全集(W01～W30)、第 3 節前端資料流(草稿被覆蓋與部分寫入路徑 P1～P11、PW1～PW6) |
 | `rulebook_concurrency_contract.md` | 第 4 節寫入契約草案、第 5 節清單級 API 設計草案(簽名、diff 規則、鎖之組合與取鎖順序) |
 | `rulebook_concurrency_defects.md` | 第 6 節現存缺陷實證(E2 / E3 / E4 / E7 / O1～O8)、第 7 節第二波實作規劃 |
@@ -18,8 +18,9 @@
 - 上位原則: `C:\opensrcOper\sgud\proc\process_principle.md` 第 10 條(使用者 2026-10-22 裁示)。共用規格(本分冊所有「契約 / 基準 / 鎖」名詞皆依此): **`C:\opensrcOper\dspec\多人同時編輯之寫入契約.md`**(規格 1, 雜湊版本 `h1`)。定稿方案與三審採納表: `C:\opensrcOper\dnow\20261022221854\方案v2.md`(第 3.4 節為本套件之方向)。設計決策: `spec/設計要點與取捨.md` D18。
 - 規格重點: 拿舊畫面存檔者**整次拒收、零寫入、保留草稿並提示重新載入**(先動先贏); 看著最新資料改者與不帶基準之外部呼叫照常寫入(後者蓋前者); 刪除先刪先贏; 任何寫入不得把伺服器專有欄位回寫成舊值、不得讓已刪之列復活、不得部分寫入; 每表一份寫入契約(前後端 import 同一檔); 每表一把表鎖(`withTabLocks`), 先表鎖後實體鎖; 不設快取。
 - 本套件特點: ①**寫入不經 procOrm**(procCore 檔頭, 為避免 clearXSS 改動 markdown content / result); ②僅 `channels`、`channelMembers` 兩表有後台整表編輯頁, 其餘五表為狀態機 / 純新增 / 系統搬移; ③**無外部同步**(無 V2、V3); ④`channelMembers.lastSeenMessageId` 為伺服器專有(agent 已讀游標)。
-- **現況(2026-10-23 第二波 task-run01)**: 契約、清單級 API、表鎖、補償還原、`ackChannel` 兩段式、`archiveSweep` 逐筆鎖、`respondTask` 冪等、前端草稿保護皆已實作並有測試; 規格 V1～V14 逐條有測試(V2 / V3 不適用); 變異驗證 49 個(48 被抓到、1 個等價變異); 修前紅有證據; 經 sol / beam 兩位外審並修補(見 9.6)。**待裁示一項**: 刪頻道時該頻道之訊息與任務之處置(維持現行, 見第 9.6 節)。
-- inv01 結論數字(可由「規則總表」之指令重跑): 7 表 94 欄 = 客戶端 9 / 雙方 0 / 伺服器專有 85; 業務函式 22(procCore 匯出 21 + `getWebInfor`); kpFunExt 20(第二波後 24); HTTP 路由 16; 生產碼寫入站點 30(procCore 21 + 離線工具 9), 未歸類 0; 缺陷實證 E2、E3、E4、E7 + 其他 O1–O8(修前探測皆紅, 第二波後皆綠, O7 之訊息 / 任務部分待裁示)。
+- **現況(2026-10-23 第二波 task-run01)**: 契約、清單級 API、表鎖、補償還原、`ackChannel` 兩段式、`archiveSweep` 逐筆鎖、`respondTask` 冪等、前端草稿保護皆已實作並有測試; 規格 V1～V14 逐條有測試(V2 / V3 不適用); 變異驗證 49 個(48 被抓到、1 個等價變異); 修前紅有證據; 經 sol / beam 兩位外審並修補(見 9.6)。
+- **現況(2026-10-23 第三輪 task-run02, 修正輪)**: 原待裁示 Q2 經使用者裁示「移入封存表」, **已實作**(刪頻道時該頻道之訊息與任務整列移入 `messagesArchive` / `tasksArchive`, 與成員連帶刪除同一次操作、全有或全無; D19); task-verify01 N1(編輯器開啟中收到推播丟輸入)**已修**(視同草稿; 頻道頁、成員頁)。變異驗證 後端 34(33 被抓到、1 對照綠)+ 前端 8(7 被抓到、1 存活為防禦性冗餘; 見 9.8); 另經 sol 外審採納 6 條(含補償持鎖、訊息 / 掃描共用鎖、頻道列於全部頻道搬移後才刪)。**目前無待裁示事項**。
+- inv01 結論數字(可由「規則總表」之指令重跑): 7 表 94 欄 = 客戶端 9 / 雙方 0 / 伺服器專有 85; 業務函式 22(procCore 匯出 21 + `getWebInfor`); kpFunExt 20(第二波後 24); HTTP 路由 16; 生產碼寫入站點 30(procCore 21 + 離線工具 9), 未歸類 0; 缺陷實證 E2、E3、E4、E7 + 其他 O1–O8(修前探測皆紅, 第二波後皆綠; O7 之訊息 / 任務部分原待裁示, 2026-10-23 第三輪依使用者裁示實作後全綠)。
 
 ### 規則總表(2026-10-23 現況)
 
@@ -33,11 +34,12 @@
 | **R-CONC-06** 刪除未命中一律回 `rowNotFound`(含不帶基準者); 語系鍵 `errRowNotFound` | 清單刪除 2 個、單筆刪除 2 個(`deleteChannelsCore` / `deleteMembersCore` 之 `read`); 系統搬移(`archiveSweep`)以「鎖內重讀不在即略過」處理 | **已套**; 變異 `delete-miss-ok`、`delete-members-no-scope` 被抓到 | `git grep -n "rowNotFound" -- server`(procCore 16、procLang 2) |
 | **R-CONC-07** 存檔不採用客戶端之伺服器專有欄位(契約 `fields` 白名單 `pickWriteRow`) | 頻道新增 / 修改、成員新增 / 修改 | **已套**: `pick(row` 0 處; 變異 `adopt-client-server-fields` 被抓到 | `git grep -c "pick(row" -- server/procCore.mjs`(應 0)、`git grep -n "pickWriteRow" -- server` |
 | **R-CONC-08** 清單編輯頁一次提交至清單級 API, 不得逐列迴圈呼叫單筆 API | 4 處前端迴圈(`LayoutContentChannels.vue` 刪 / 存、`LayoutContentMembers.vue` 刪 / 存) | **已套**(0 / 4); `unit-draft`「R-CONC-08」兩案守(src 內無單筆呼叫、清單頁呼叫皆帶 `{ baseline`) | `git grep -n -F -e '$fapi.saveChannel(' -e '$fapi.saveChannelMember(' -e '$fapi.deleteChannel(' -e '$fapi.deleteChannelMember(' -- src`(應 0) |
-| **R-CONC-09** 草稿保護: 有未存修改時推播不重建編輯內容、凍結載入時基準、提示「資料已被他人更新」; 存檔被拒保留草稿; 新基準取自伺服端 | 頻道頁 `watch: channels`→`onStorePush`、成員頁 `watch: storeMembers`、兩頁 `isEditable` 切換、存檔 / 刪除成功路徑 | **已套**(頻道頁、成員頁); 純邏輯 `src/plugins/mDraft.mjs`(`unit-draft` 15 案)、真瀏覽器 E2E-014 / E2E-015 兩語系(含外審補驗: 重新載入後新基準可存、切換頻道確認 P5、草稿中刪除後已刪列不復活); 成員頁切換頻道時有草稿先確認(P5)已做 | `ls src/plugins/mDraft.mjs`; `grep -n "decidePush\|isDirty\|isStale" src/components/*.vue` |
+| **R-CONC-09** 草稿保護: 有未存修改時推播不重建編輯內容、凍結載入時基準、提示「資料已被他人更新」; 存檔被拒保留草稿; 新基準取自伺服端 | 頻道頁 `watch: channels`→`onStorePush`、成員頁 `watch: storeMembers`、兩頁 `isEditable` 切換、存檔 / 刪除成功路徑 | **已套**(頻道頁、成員頁); 純邏輯 `src/plugins/mDraft.mjs`(`unit-draft` 22 案; 第三輪增編輯器開啟中視同草稿 `decidePush({ isEditing })` 與 `src/plugins/mGridEdit.mjs`)、真瀏覽器 E2E-014 / E2E-015 兩語系(含外審補驗: 重新載入後新基準可存、切換頻道確認 P5、草稿中刪除後已刪列不復活)與 E2E-016 / E2E-017 兩語系(第三輪: 儲存格編輯器開啟中已輸入未按 Enter 時收到推播, 編輯器與輸入不丟、提示條、Esc / Enter 關閉後依一般規則); 成員頁切換頻道時有草稿先確認(P5)已做 | `ls src/plugins/mDraft.mjs src/plugins/mGridEdit.mjs`; `grep -n "decidePush\|isDirty\|isStale\|isEditorOpen" src/components/*.vue` |
 | **R-CONC-10** 封存逐筆取 `task:<id>` 鎖後重讀再搬移; 訊息守衛集合取自「實際搬走」之任務 | `archiveSweep` | **已套**; 變異 `archive-no-reread`、`archive-no-task-lock`、`archive-guard-from-candidates` 被抓到 | `git grep -n "kmx('task:'" -- server/procCore.mjs`(4: claim / respond / reset / archiveSweep 迴圈內) |
 | **R-CONC-11** 比對用之讀取不經 ORM 快取; 同表由同一 ORM 實例與同一鎖管理器寫入 | 單一 `WServOrm(ds, WOrm, url, db)` 實例(`WWebTask.mjs`), 未傳 `useCache`; `withTabLocks` / `guardWrite` 取自同一實例並傳入 procCore | 已套(useCache 0 處); procCore 缺 `withTabLocks` / `guardWrite` 即建構拋錯 | `git grep -n "useCache" -- server g.mOrm.mjs srv.mjs`(應 0); `git grep -n "WServOrm(" -- server g.mOrm.mjs` |
 | **R-CONC-12** 取鎖順序恆為 lockSave(不排隊之雙擊占位)→ 表鎖(依表名碼元序, 一次宣告兩表)→ 實體鎖; 不可重入, 同一呼叫鏈不巢狀取同表 | procCore: lockSave 8 站點(清單 4 + 單筆 4 + `postMessage` 1 = 9 呼叫點)、kmx(`postMessage:<c>`、`task:<id>` ×4、`channelMember:<c>:<m>`: ack 第一段 / 成員刪除 `opDeleteMember` / 成員改名 `opModify` 之 `lockKey`)、`postMessage` 於 `channels` 表鎖內重查頻道存在再寫入 | **已套**: 鎖序 lockSave → 表鎖 → 實體鎖; `ackChannel` 第一段只取實體鎖、結束後才取表鎖(第二段), 無「持實體鎖等表鎖」; 清單 API 於表鎖內對「刪除成員 / 成員改名」再取 `channelMember:<c>:<m>` 實體鎖(表鎖→實體鎖方向, 與 ack 不倒置), 刪除前像於實體鎖內重讀; 以 V14 三案與「外審補驗」交錯案(人為延遲)守序列化; 變異 `delete-member-no-entity-lock`、`rename-no-entity-lock`、`ack-no-entity-lock`、`postmessage-no-channels-lock` 被抓到 | `git grep -n -E "kmx\(\|lockSave\(" -- server/procCore.mjs` |
 | **R-CONC-13** 離線工具 `g.initialData.mjs` 與服務互斥(lmdb 單行程持有) | 9 站點(W22–W30) | 已套(不變; 前提文件化) | `git grep -n "g.initialData" -- test/tools server srv.mjs package.json` |
+| **R-CONC-15** 刪除頻道時, 其引用 (訊息、任務) 連帶處置而不留孤兒 (原則 6; 使用者 2026-10-23 裁示 Q2「移入封存表」, 不直接刪除): 三入口共用 `buildChannelDeleteOps`; 寫入單元順序任務(逐筆, `task:<id>` 鎖內重讀)→訊息(整批, 任務搬完後才讀)→成員列→頻道列(最後刪); 全有或全無(`runOps` 補償, 檢查 `ok` 與命中); 不增 schema 欄 | 3 個入口: `deleteChannelsCore`(清單刪除、單筆刪除經此)、`saveChannelsCore` 之刪除集合; 寫入單元 `opMoveTask` / `opMoveMessages`; 讀取介面 `getArchivedTasks` / `getArchivedMessages` | **已套**(3 / 3 入口); `unit-procCoreConcurrency`「Q2」節 22 案、`api-concurrency` Q2 一案; 變異 34 個(33 被抓到, 1 對照綠, 見 9.8) | `git grep -n "buildChannelDeleteOps" -- server`(定義 1 + 使用 2); `git grep -n -E "opMoveTask\|opMoveMessages" -- server`; 搜 `opDelete('channels'` 應只在 `buildChannelDeleteOps` 內 1 處(頻道列刪除不得繞過搬移); `git grep -n "'msgarch:'" -- server`(應 2: 搬移 / 補償之 `opMoveMessages`、封存掃描之訊息階段, 兩處同一把鎖) |
 | **R-CONC-14** 資料列記錄最後修改者 `userIdUpdate`; 直寫路徑補填; 清單 API 只對有變動之列補填 | 7 表皆有 `userIdUpdate`; 清單 API 未改動之列(摘要相符)不寫入、不蓋稽核欄 | **已套**; 變異 `unchanged-always-write` 被抓到; `unit-procCoreConcurrency` E3 案守「未被編輯之 agent 列最後修改者仍為 ack 者」 | `git grep -n "userIdUpdate" -- server/procCore.mjs` |
 
 ## 8. 本輪決定與待裁示(摘要; 詳見任務報告)
@@ -103,7 +105,7 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 | O4 成員重複 | RED | 「O4 / Q5」兩案綠 |
 | O5 名稱不驗 | RED | 「O5」綠 |
 | O6 採用客戶端專有欄位 | RED | 「O6 轉綠」「V5」綠 |
-| O7 刪頻道不清引用 / 可對已刪頻道發訊 | RED(成員 / 訊息 / 任務各殘留 1; 發訊成功) | 成員列連帶刪除、`errChannelNotFound` 綠; **訊息與任務維持現行(待裁示)**, `unit-procCoreConcurrency`「O7 / Q2」註明 |
+| O7 刪頻道不清引用 / 可對已刪頻道發訊 | RED(成員 / 訊息 / 任務各殘留 1; 發訊成功) | 成員列連帶刪除、`errChannelNotFound` 綠; 訊息與任務原維持現行(待裁示), **2026-10-23 依使用者裁示改為移入封存表, 已綠**(`unit-procCoreConcurrency`「O7 / Q2」與「Q2」節; 見 9.8) |
 | O8 `respondTask` 重複 taskReply | RED(重試後 2 則) | 「O8」三案綠 |
 
 修前紅證據: inv01 探測腳本(複本 `tmp/task-run01/inv01/`)於本輪開工時對未改之程式重跑仍為 RED(E2 ×3、E3 ×3、E4 ×3、E7 ×3、其他 ×14); 正式測試 `unit-procCoreConcurrency` 對 HEAD 之 `server/` 副本(`git archive HEAD` 解至 `tmp/`)跑: 當時之測試檔(47 案)中 5 綠 42 紅(綠者為「既有行為不變」類: 契約 2、digestRow 1、狀態機歷史回覆 1、Q8 1); 紅者含「函式不存在」與行為紅兩類(夾具以單筆 API 退回建資料, 使行為紅可見); 其後測試檔因外審補驗增至 72 案(紅綠比未重跑, 新增案屬外審所提之交錯與硬失敗缺格, 以變異驗證證明可抓錯)。
@@ -118,7 +120,7 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 
 ### 9.6 待裁示、已知不修與外審採納
 
-**待裁示(使用者)**: 刪頻道時該頻道之訊息與任務之處置(原則 6 vs 原則〇之一③; 現維持不刪不搬; 主控建議移入 `messagesArchive` / `tasksArchive`)。
+**待裁示(使用者)**: ~~刪頻道時該頻道之訊息與任務之處置~~ —— 2026-10-23 使用者裁示「移入封存表」, 已於第三輪實作(9.8), 現無待裁示事項。
 
 **外審採納(sol 20 條 + beam 8 條, 逐條讀碼 / 實測核實)**: 屬實並已修 —— sol #1 刪除補償撤銷已成功之 ack(前像改於實體鎖內重讀)、#2 成員改名與 ack 不互斥(改名於同一實體鎖內寫入)、#3 ack 與讀取端有效列條件不一致、#4(= beam #3)發訊存在檢查與新增不在同一互斥範圍(鎖內重查)、#5 封存未檢查逐筆結果與熱表刪除失敗後留下矛盾冷表、#7 深度合併無法精確還原物件欄位(拒收非字串客戶端欄位)、#8 草稿中刪除後舊快照使已刪列被重新新增、#9 切頻道丟草稿(P5)、#10 A→B→A 舊回應覆蓋草稿(`loadSeq`)、#11(= beam #1)自身寫入期間之他人推播(存檔成功後依 store 重算; 已於先前輪次處理)、#12 `isDirty` 未驗主鍵集合、#13 單筆 API 成功形狀(撤回改變)、#14 空表無法新增、#15 特殊識別碼重複警告、#16 刪除入口誤分類庫內重複主鍵、#17～#20 測試缺格(皆已補測, 見 9.3 / 9.5 與 `unit-procCoreConcurrency`「外審補驗」)。
 
@@ -142,6 +144,29 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 | `server/procCore.mjs`(寫入函式) | `unit-procCore`、`unit-procCoreConcurrency`、`api-doubleclick`、`api-agent`、`api-concurrency`、e2e E2E-005 / 008 / 010 / 014 / 015 |
 | `server/WWebTask.mjs`(kpFunExt / 組裝) | 上列 + `api-dataChannel`、`unit-authorizeExec`、`unit-optRemoved`、`api-tokenLeak` |
 | `src/schema/**`(契約 / schema) | 上列 + `unit-procCoreConcurrency` 之契約案、`unit-draft` |
-| `src/plugins/mDraft.mjs` | `unit-draft`、e2e E2E-014 / 015 |
-| 前端清單頁(`LayoutContentChannels.vue` / `LayoutContentMembers.vue`) | `unit-draft`、e2e E2E-005 / 008 / 010 / 014 / 015(兩語系) |
+| `server/procCore.mjs` 之刪頻道搬移(`buildChannelDeleteOps` / `opMoveTask` / `opMoveMessages`; 第三輪) | `unit-procCoreConcurrency`(全檔; 「Q2」節為主)、`unit-procCore`、`api-concurrency`、`api-agent`(封存 / 任務生命週期); 不需 e2e(UI 不變) |
+| `src/plugins/mDraft.mjs`、`src/plugins/mGridEdit.mjs` | `unit-draft`、e2e E2E-014 / 015 / 016 / 017 |
+| 前端清單頁(`LayoutContentChannels.vue` / `LayoutContentMembers.vue`) | `unit-draft`、e2e E2E-005 / 008 / 010 / 014 / 015 / 016 / 017(兩語系; 008 為聊天頁成員視窗共用 `LayoutContentMembers`) |
+| `server/procLang.mjs` 之 `deleteChannelConfirm` 等語系鍵 | 無標準圖含刪頻道確認框(`grep -n "deleteChannelConfirm" test/`: 0); 跑 `unit-procCore`、`unit-optRemoved` |
 | 共用基礎(測試輔助、版面共用元件、樣式、建置設定、w-serv-orm 升版) | 擴大至 e2e 全跑 + 全套 unit / api |
+
+### 9.8 第三輪(2026-10-23, 任務 task-run02, 修正輪): 刪頻道移入封存表(Q2)與編輯器開啟中視同草稿(N1)
+
+**範圍**: ①刪頻道時該頻道之訊息與任務移入封存表(使用者 2026-10-23 裁示; D19); ②task-verify01 N1(排程項第 115 項)編輯器開啟中收到推播不丟輸入(頻道頁、成員頁); ③文件。不改狀態機、不改 run01 之其他行為。
+
+**修前紅**(證據 `C:\opensrcOper\dnow\20261022221854\agent-out\task-run02-evidence\red-before\`):
+- 後端: 新測試對 HEAD 之 `server/` 副本(`git archive HEAD server src` 解至 `tmp/`, 不 checkout)跑 `unit-procCoreConcurrency`: **13 紅**(皆為行為紅: 熱表殘留任務 / 訊息、封存表無複本、補償矩陣不含搬移、等任務鎖之交錯; 本輪新增之 API 皆為既有函式, 無「函式不存在」類紅)。
+- 前端: 以 `cp` 把 HEAD 版 `LayoutContentChannels.vue` / `LayoutContentMembers.vue` / `mDraft.mjs` 換入 `src/`(備份於 `tmp/`, 跑完 `cmp` 驗證還原)後跑 E2E-016 / E2E-017 兩語系: **4 紅** —— 頻道頁「N1: 編輯器開啟中收到推播不得關閉編輯器」(編輯器被重建關閉, 輸入丟失), 成員頁「提示條不出現」(編輯器本就不丟, 缺提示)。修後 4 綠(新標準圖 6 張經逐張目視; 既有 52 張 0 張改變)。
+
+**外審(sol, 1 位; gpt-6.1-sol max, 唯讀)發現 6 條, 逐條讀碼核對後採納 5 條(含 2 條高)、1 條部分採納, 皆已修並補測**(原文 `agent-out/task-run02-evidence/review/sol-review-original.md`): #1(高)任務補償未持 `task:<id>` 鎖, 與封存掃描交錯可使任務兩表皆無 → 補償移入同一把鎖; #2(高)訊息補償與掃描交錯同(初版列「已知不修」, 外審指出不符「全有或全無」) → 搬移 / 補償 / 掃描之訊息階段共用 `msgarch:<channelId>` 鎖(掃描依頻道分組逐組取鎖), 原已知不修條目取消; #3(中)補償無條件刪封存列, 中斷後重試遇「冷熱並存」殘留會刪掉原有封存列 → 記搬移前封存表是否已有該列, 補償只刪本次新增者; #4(中)提交(Enter)後 `rowsChange` / 停止事件回呼前之空窗到達之推播仍可重建丟草稿 → 頻道頁 `onStorePush` 以 `resolveModified` 依列內容重算並把 `editDefer` 視同編輯中; #5(中)多頻道中斷後原請求不能續跑 → 頻道列於全部頻道搬移後才刪; #6(低)`messagesMoved` 為選取數 → 鎖內讀取後即為實際搬移數(掃描持鎖時刪頻道須等待)。另補採其測試缺格建議: 熱表刪除回 `ok:0`、批次混合 `ok:1/0`、`claimTask` 進行中互斥、已有草稿時再開編輯器、失焦(點他處)關閉; 不補: 附件內容(整列複製, 與欄位內容無關)、元件層「非同步事件已入列後取消」之確定性重現(見下)。
+- **無法決定性重現者(誠實揭露)**: 提交後事件回呼前之空窗 (#4) 僅數毫秒, 無法在真瀏覽器穩定重現; 純邏輯層以 `unit-draft`「resolveModified」兩案守, 元件層之接線(`onStorePush` 取 `resolveModified` 與 `editDefer`)只由讀碼與外審保證, 變異「拿掉該接線」e2e 抓不到(等價於不重現之空窗)。
+
+**變異驗證**(後端對 `server/procCore.mjs` 副本逐一施加; 腳本第二版 `mutate.mjs`(`tmp` 內腳本於結束前清理, 複本收於任務資料夾 `agent-out/task-run02-evidence/mutation/`), 逐條結果 `mutation-result2.md` 與補跑之 `mutation-result-partial2.md`): 34 個(1 對照 + 33 變異)**33 全被抓到、對照全綠**: 不搬任務 / 只搬終態任務 / 不搬訊息、任務或訊息只刪熱表不寫封存表、封存寫入不檢查 `ok`(任務、訊息各一)、搬任務不取 `task:<id>` 鎖、**任務補償不取鎖、訊息補償不取鎖、掃描之訊息階段不取鎖、訊息搬移不取鎖(由「掃描持鎖時刪頻道須等待」之計數案抓到)**、熱表刪除不要求命中、任務與訊息補償各三種缺漏(整個無補償 / 不補回熱表 / 不撤封存複本)、**補償一律刪封存列(任務、訊息各一)、搬移前不讀冷表原有列**、先搬訊息後搬任務、訊息於建立寫入單元時預讀、頻道列先刪、**頻道列於各頻道搬移後即刪**、只搬 `isActive y` 之任務或訊息、清單存檔之刪除集合不搬、清單刪除不搬、不記 log、log 筆數不累計(任務、訊息各一)。(第一版 26 個結果仍留 `mutation-result.md`; 第二版為外審採納後之補強, 錨點隨程式改動。)
+- 前端以 Edit 逐一施加與還原(每輪 `cmp` 比對備份): `decidePush` 忽略 `isEditing`(`unit-draft` 抓到)、`isEditorOpen` 恆 false(`unit-draft` 抓到)、頻道頁 / 成員頁 `onStorePush` 不判編輯器(E2E-016 / E2E-017 抓到)、頻道頁編輯器關閉後不重新處理推播(E2E-016 抓到)、成員頁模板條件退回只看 `isModified`(E2E-017 抓到)、成員頁不掛編輯器關閉監聽(E2E-017 抓到); **存活 1 個**: 頻道頁 `onEditorStopped` 不先以內容重算 `isModified`(E2E-016 仍通過) —— 實測 `rowsChange` 先於停止事件回呼, 重算屬防禦性冗餘, 於外審 #4 之空窗(事件順序不保證)才有作用, 保留。
+- 變異過程中發現並修正之測試脆弱點: `Q2 交錯(停在搬訊息前)` 案之 `pauseOnce` 謂詞原綁死查詢形狀(`isActive === undefined`), 變異 `select-msgs-active-only` 因而在非預期之測試超時才「被抓到」; 已放寬為只比 `channelId`, 該變異改由 `isActive n` 專案抓到。另 `Q2 多頻道` 案初版之故障點(第 5 次寫入)恰落在變異 `channel-row-per-channel` 之頻道列刪除, 該變異存活; 改為第 6 次後被抓到。
+
+**依原則自行決定**(皆已記 `decisions.tsv`, phase `task-run02`): 進行中任務一併搬移且維持原狀態、不拒絕刪除(原則 3、原則〇之一③; 理由見 D19 第 4 點); 不增 schema 欄(D19 第 1 點); 頻道列最後刪(D19 第 3 點); 訊息於任務搬完後才讀(D19 第 2 點); 新增 E2E-016 / E2E-017 與 6 張標準圖(主控授權); 舊孤兒不遷移(D19 取捨③)。
+
+**已知不修(附理由)**: ①升版前已刪頻道所遺之孤兒不自動搬移(稽核方式見 README); ②補償亦失敗(`saveWriteFail`)時庫內可能留中間態(本來即只保證回報, 見 D18; 此時頻道列仍在, 重送可補完); ③提交後事件回呼前之空窗於元件層無決定性 e2e(見上)。(初版之「補償與封存掃描交錯可能兩表皆無」已於外審後修復, 取消。)
+
+**待辦**: 無新增(舊孤兒搬移若業主要求另案)。

@@ -165,6 +165,41 @@ describe('api-concurrency（多人同時編輯之清單級 API 契約, 原則 10
         assert.strictEqual(await err('postMessage', [ch.id, 'to-deleted']), 'errChannelNotFound')
     })
 
+    it('Q2 刪頻道 (經真後端實際傳輸): 該頻道之訊息與任務 (含進行中) 移入封存表 —— getArchivedTasks / getArchivedMessages 讀得到, 熱表查詢為空, getStats 不計, agent 對已移走之任務得 errTaskNotFound', async function() {
+        let r = await ok('saveChannels', [[{ name: `${PREFIX}-arch` }]])
+        let ch = r.rows.find((c) => c.name === `${PREFIX}-arch`)
+        let stBefore = await ok('getStats', [])
+        await ok('postMessage', [ch.id, 'q2-plain'])
+        let t1 = (await ok('postMessage', [ch.id, 'q2-pending', { asTask: true }])).task
+        let t2 = (await ok('postMessage', [ch.id, 'q2-running', { asTask: true }])).task
+        await ok('claimTask', [t2.id])
+        let stMid = await ok('getStats', [])
+        assert.ok(stMid.messages >= stBefore.messages + 3 && stMid.tasks.total >= stBefore.tasks.total + 2, '前置: 熱表統計含本頻道之 3 則訊息與 2 個任務')
+
+        await ok('deleteChannels', [[ch.id]])
+
+        //封存表讀得到 (進行中任務維持原狀態)
+        let at = await ok('getArchivedTasks', [ch.id, 50, 'asc'])
+        assert.deepStrictEqual(at.map((t) => t.id).sort(), [t1.id, t2.id].sort())
+        assert.strictEqual(at.find((t) => t.id === t2.id).state, 'running')
+        assert.strictEqual(at.find((t) => t.id === t1.id).state, 'pending')
+        let am = await ok('getArchivedMessages', [ch.id, 50])
+        assert.strictEqual(am.length, 3)
+        assert.ok(am.some((m) => m.content === 'q2-plain'))
+        //熱表查詢為空
+        assert.deepStrictEqual(await ok('getTasks', [ch.id, 50]), [])
+        assert.deepStrictEqual(await ok('getMessages', [ch.id, 50]), [])
+        //統計不計孤兒: 較刪除前至少少 3 則訊息 / 2 個任務, 且不高於本頻道建立前
+        let stAfter = await ok('getStats', [])
+        assert.ok(stMid.messages - stAfter.messages >= 3 && stMid.tasks.total - stAfter.tasks.total >= 2, '熱表統計已不含該頻道之訊息與任務')
+        assert.ok(stAfter.messages <= stBefore.messages && stAfter.tasks.total <= stBefore.tasks.total, '刪頻道後統計不高於建頻道前 (無孤兒)')
+        assert.strictEqual(stAfter.channels, stBefore.channels - 1, 'stBefore 於建頻道後取得; 刪除後頻道數少 1')
+        //agent 對已移走之任務 / 已刪頻道之操作被拒
+        assert.strictEqual(await err('claimTask', [t1.id]), 'errTaskNotFound')
+        assert.strictEqual(await err('respondTask', [t2.id, 'late', 'done']), 'errTaskNotFound')
+        assert.strictEqual(await err('postMessage', [ch.id, 'to-deleted']), 'errChannelNotFound')
+    })
+
     it('同一操作者並行清單存檔 → 第 2 次只能被占位 key saveInProgress 拒絕 (時序無關不變式); 資料終態一致', async function() {
         let rs = await Promise.all([
             rpc('saveChannels', [[{ name: `${PREFIX}-par` }]]),

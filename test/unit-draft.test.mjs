@@ -7,7 +7,8 @@ import { fileURLToPath } from 'url'
 import { buildBaseline } from 'w-serv-orm/src/baseline.mjs'
 import channelsContract from '../src/schema/contracts/channels.mjs'
 import getMembersContract from '../src/schema/contracts/channelMembers.mjs'
-import { STALE_KEYS, isStaleKey, calcBaseline, sameBaseline, isStale, isDirty, countDuplicates, decidePush, removeFromBaseline } from '../src/plugins/mDraft.mjs'
+import { STALE_KEYS, isStaleKey, calcBaseline, sameBaseline, isStale, isDirty, resolveModified, countDuplicates, decidePush, removeFromBaseline } from '../src/plugins/mDraft.mjs'
+import { isEditorOpen, onceEditorStopped } from '../src/plugins/mGridEdit.mjs'
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -69,6 +70,102 @@ describe('unit-draft', function() {
                 let d = decidePush({ isModified: m, ownWriting: true, baseline: base, rows: [], contract: channelsContract })
                 assert.deepStrictEqual(d, { action: 'defer', stale: false })
             }
+        })
+
+        it('N1 / task-verify01 #115: 儲存格編輯器開啟中 (已輸入未按 Enter, 尚無 isModified) 視同有草稿 → keep (不重建), 他人已改內容則 stale=true (提示); 內容全同則不提示', function() {
+            let others = chRows()
+            others[1].name = 'beta-by-other'
+            assert.deepStrictEqual(decidePush({ isModified: false, isEditing: true, ownWriting: false, baseline: base, rows: others, contract: channelsContract }), { action: 'keep', stale: true })
+            assert.deepStrictEqual(decidePush({ isModified: false, isEditing: true, ownWriting: false, baseline: base, rows: chRows(), contract: channelsContract }), { action: 'keep', stale: false })
+        })
+
+        it('N1: 編輯器未開啟且無修改 → 仍 rebuild (isEditing 缺省 / false 皆同); 自身存檔期間優先於編輯器 (defer)', function() {
+            assert.deepStrictEqual(decidePush({ isModified: false, isEditing: false, ownWriting: false, baseline: base, rows: chRows(), contract: channelsContract }), { action: 'rebuild', stale: false })
+            assert.deepStrictEqual(decidePush({ isModified: false, ownWriting: false, baseline: base, rows: chRows(), contract: channelsContract }), { action: 'rebuild', stale: false })
+            assert.deepStrictEqual(decidePush({ isModified: false, isEditing: true, ownWriting: true, baseline: base, rows: chRows(), contract: channelsContract }), { action: 'defer', stale: false })
+        })
+    })
+
+    describe('resolveModified: 提交 (Enter) 後 rowsChange / 停止事件回呼前之空窗以列內容重算 (外審 sol#4)', function() {
+        let base = calcBaseline(chRows(), channelsContract)
+
+        it('旗標為真 → 真; 旗標為假但畫面列已與凍結基準不同 (剛提交之修改, 旗標尚未更新) → 真; 旗標為假且列相同 → 假', function() {
+            assert.strictEqual(resolveModified(true, chRows(), base, channelsContract), true)
+            let edited = chRows()
+            edited[0].description = 'just-committed'
+            assert.strictEqual(resolveModified(false, edited, base, channelsContract), true)
+            assert.strictEqual(resolveModified(false, chRows(), base, channelsContract), false)
+            assert.strictEqual(resolveModified(undefined, chRows(), base, channelsContract), false)
+        })
+
+        it('配合 decidePush: 空窗內 (旗標假、編輯器已關、列已改) 收到推播不得 rebuild (剛提交之修改視為草稿 → keep)', function() {
+            let edited = chRows()
+            edited[0].description = 'just-committed'
+            let others = chRows()
+            others[1].name = 'beta-by-other'
+            let modified = resolveModified(false, edited, base, channelsContract)
+            assert.deepStrictEqual(decidePush({ isModified: modified, isEditing: false, ownWriting: false, baseline: base, rows: others, contract: channelsContract }), { action: 'keep', stale: true })
+            //對照: 只看旗標 (修前) 會 rebuild, 剛提交之修改丟失
+            assert.deepStrictEqual(decidePush({ isModified: false, isEditing: false, ownWriting: false, baseline: base, rows: others, contract: channelsContract }), { action: 'rebuild', stale: false })
+        })
+    })
+
+    describe('mGridEdit: 儲存格編輯器開啟中之判定與關閉監聽 (N1)', function() {
+        //假 ag-grid api: getEditingCells 回目前編輯中儲存格; addEventListener / removeEventListener 記錄監聽; fire 模擬 ag-grid 發出事件
+        const mkApi = (editing = []) => {
+            let ls = []
+            let api = {
+                editing,
+                getEditingCells: () => api.editing,
+                addEventListener: (t, f) => { ls.push([t, f]) },
+                removeEventListener: (t, f) => { ls = ls.filter((e) => !(e[0] === t && e[1] === f)) },
+                fire: (t) => { ls.slice().forEach((e) => { if (e[0] === t) { e[1]({ type: t }) } }) },
+                count: (t) => ls.filter((e) => e[0] === t).length,
+            }
+            return api
+        }
+        const mkComp = (api) => ({ getApi: () => api })
+
+        it('isEditorOpen: getEditingCells 非空才為 true; 元件不存在 / 未就緒 (getApi 回 null 或拋錯) / api 無此方法 / 查詢拋錯一律 false (不當作編輯中而卡住推播)', function() {
+            assert.strictEqual(isEditorOpen(mkComp(mkApi([{ rowIndex: 0, column: {} }]))), true)
+            assert.strictEqual(isEditorOpen(mkComp(mkApi([]))), false)
+            assert.strictEqual(isEditorOpen(undefined), false)
+            assert.strictEqual(isEditorOpen(null), false)
+            assert.strictEqual(isEditorOpen({}), false)
+            assert.strictEqual(isEditorOpen({ getApi: () => null }), false)
+            assert.strictEqual(isEditorOpen({ getApi: () => { throw new Error('not ready') } }), false)
+            assert.strictEqual(isEditorOpen(mkComp({})), false)
+            assert.strictEqual(isEditorOpen(mkComp({ getEditingCells: () => { throw new Error('boom') } })), false)
+        })
+
+        it('onceEditorStopped: cellEditingStopped 觸發 fn 恰一次並自動移除監聽; 再觸發不重複呼叫', function() {
+            let api = mkApi([{}])
+            let n = 0
+            let dispose = onceEditorStopped(mkComp(api), () => { n++ })
+            assert.strictEqual(typeof dispose, 'function')
+            assert.strictEqual(api.count('cellEditingStopped'), 1)
+            api.fire('cellEditingStarted') //無關事件不觸發
+            assert.strictEqual(n, 0)
+            api.fire('cellEditingStopped')
+            assert.strictEqual(n, 1)
+            assert.strictEqual(api.count('cellEditingStopped'), 0, '觸發後移除監聽')
+            api.fire('cellEditingStopped')
+            assert.strictEqual(n, 1)
+            dispose() //觸發後呼叫取消函式無害
+            assert.strictEqual(n, 1)
+        })
+
+        it('onceEditorStopped: 取消函式移除監聽後不再觸發; api 無法掛接 (元件不存在 / 未就緒 / 缺方法) 回 null (呼叫端不得進入延後狀態)', function() {
+            let api = mkApi([{}])
+            let n = 0
+            let dispose = onceEditorStopped(mkComp(api), () => { n++ })
+            dispose()
+            assert.strictEqual(api.count('cellEditingStopped'), 0)
+            api.fire('cellEditingStopped')
+            assert.strictEqual(n, 0)
+            assert.strictEqual(onceEditorStopped(undefined, () => {}), null)
+            assert.strictEqual(onceEditorStopped({ getApi: () => null }, () => {}), null)
+            assert.strictEqual(onceEditorStopped(mkComp({ addEventListener: () => {} }), () => {}), null)
         })
     })
 
