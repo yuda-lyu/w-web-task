@@ -42,10 +42,17 @@
 
 ## 登入、SSO 與 agent 身分
 
-- **關聯**: `srv.mjs` 之 `getUserByToken`(測試權杖清單見 rulebook「權杖外洩防護」)、`verifyClientUser` / `verifyAppUser`(只放行 `isAdmin === 'y'`); settings 之 `ssoBaseUrl` / `ssoAppToken`; 前端 w-ui-loginout 之 `urlRedirect` 導向 SSO 登入頁; D3(認證委外 SSO)、D8(身分取自 token)、D15.
+- **關聯**: `srv.mjs` 之 `getUserByToken`(測試權杖清單見 rulebook「權杖外洩防護」)、`verifyClientUser` / `verifyAppUser`(放行 `isAdmin === 'y'`; 2026-10-25 起另放行測試用一般使用者 `id-for-member` / `id-for-outsider`, 供 `api-callerMatrix` 測本套件自身之角色與成員檢查, 見 rulebook_security R-AUTHZ-09); settings 之 `ssoBaseUrl` / `ssoAppToken`; 前端 w-ui-loginout 之 `urlRedirect` 導向 SSO 登入頁; D3(認證委外 SSO)、D8(身分取自 token)、D15.
 - **判斷**: 開發與測試以 `?token=sys` 登入(身分 `id-for-admin`); agent 以 `agent-demo`(種子頻道之主責 agent)或 `agent-api` / `agent-sso` / `agent-perm` / `agent-task`(外部執行 agent 之測試頻道)呼叫 REST; `ssoAppToken` 為空時不打 SSO、直接回 `{}`(查無). 端點用 `127.0.0.1` 時 w-ui-loginout 之 `isDev()` 為 false, 不會自動帶 `sys`——未帶 token 即導向 SSO. 本套件不存 users / tokens, token 時效與撤銷全交 SSO.
 - **授權門檻(2026-10-14 起, D17)**: 瀏覽使用者之門檻為部署方之 verifyClientUser, 同時作用於登入檢查與前端資料通道之每次請求(連線閘; 前端每 2 秒輪詢皆經過, 故參考入口不於其內印 log); agent 之 HTTP REST 經 verifyAppUser. 資料通道之表操作只開 select, 頻道與成員之寫入只經 kpFunExt. 驗「被拒者」用測試權杖 `{token-for-nonadmin}`(isAdmin='n', 受 `NODE_ENV` 守門).
 - **處理**: 探測與手動驗收一律帶 `?token=sys`, 必要時以 `context.route` 只放行本專案 port, 避免被導向 SSO 登入頁(可能正被 sso 之 e2e 使用); 正式部署設 `NODE_ENV=production` 即停用全部測試權杖, 並改提供真實 `getUserByToken`; agent 之寫入身分一律取自 token, 不因呼叫端自帶 agentId / senderId 而改(D8).
+
+## 呼叫者角色與成員檢查: 新增 / 修改入口函數之流程(2026-10-25, D20)
+
+- **關聯**: `server/access.mjs`(`createAccess` 原語、`createGuardedFuncs` 入口函數表)、`server/WWebTask.mjs`(`authToken`、`kp`、`operOrm`、HTTP 路由、`sysFuncsPublic`)、`test/api-callerMatrix.test.mjs`、`test/unit-access.test.mjs`、rulebook_security R-AUTHZ-01～10、`spec/設計要點與取捨.md` D20。
+- **判斷**: 凡新增或改動「對外入口」(資料通道 `kpFunExt`、表 select、HTTP 路由、系統函數)皆適用。授權只在入口函數表套用一次, procCore 不做授權、不得在 WWebTask 內直呼 `pc.<業務函數>(`(`grep -nE "\bpc\.[a-zA-Z]+\(" server/WWebTask.mjs` 應只剩 `pc.archiveSweep`)。
+- **處理**: ①先決定規則分類(`admin` / `byChannel` / `byTask` / `byParticipant` / `user`)並加於 `createGuardedFuncs`; 管理類(寫頻道 / 成員)一律限系統管理員, 頻道內容限成員或管理員, 不另建「頻道管理者」判準(`role` / `ownerId` 為後台可編欄)。②`kpFunExt` 以 `kp(name, (c, …) => gf.<名>(c, …))` 掛上(保持原參數個數), HTTP 路由以 `gf.<名>(access.callerOfUser(user), …)`。③加入 `api-callerMatrix` 之 `ops`(`api-callerMatrix`「入口全集」案與 `unit-access` A6 會在漏加時紅); 清單類入口須回「有權看之頻道」而非整表。④檢查之值須即使用之值(同一個 `channelId` / `taskId` 傳給檢查與業務函式); 非字串一律拒。⑤改完跑變異腳本(見 experience「呼叫者身分驗證」)抽驗: 拿掉該入口之規則須被測試抓到。⑥新增之測試權杖放 `srv.mjs` 並受 `NODE_ENV !== 'production'` 守門。
+- **注意**: 修改 `server/access.mjs` / `server/WWebTask.mjs` 時不要同時跑變異腳本(會被還原覆蓋); e2e 進行中不改 `server/` 與 `src/`(後端重起與 dev server 重編會使案例失敗)。
 
 ## 語系注入
 

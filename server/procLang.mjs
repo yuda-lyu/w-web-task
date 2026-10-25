@@ -190,6 +190,14 @@ let kpLang = {
         eng: 'Token does not have permission',
         cht: '權杖無存取權限',
     },
+    errUserNotAdmin: { //管理類函數 (頻道與成員之建立、修改、刪除) 限系統管理員 (C2, spec D20)
+        eng: 'Only a system administrator can do this',
+        cht: '僅系統管理員可執行此操作',
+    },
+    errChannelNotMember: { //頻道內容 (訊息、任務、游標、成員名冊) 與檔案限系統管理員或頻道成員 (C2, spec D20)
+        eng: 'You are not a member of this channel',
+        cht: '您不是此頻道的成員',
+    },
     errPayloadInvalid: {
         eng: 'Invalid payload',
         cht: '請求內容格式錯誤',

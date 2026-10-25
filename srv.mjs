@@ -83,6 +83,40 @@ let getUserByToken = async (token) => {
     if (token === '{token-for-nonadmin}' && process.env.NODE_ENV !== 'production') {
         return { id: 'id-for-nonadmin', name: 'nonadmin', email: 'nonadmin@example.com', isAdmin: 'n' }
     }
+    //呼叫者存取矩陣之測試權杖 (test/api-callerMatrix, 受 NODE_ENV 守門; 下方 verifyClientUser / verifyAppUser 對 id-for-member / id-for-outsider 放行以測套件自身之角色與成員檢查):
+    //'{token-for-member}' 一般使用者 (測試中為某頻道之成員)、'{token-for-outsider}' 一般使用者 (非任何頻道成員)、
+    //'{token-for-appuser}' 應用系統 token・使用者用途 (綁定 id-for-member, 反查回所綁使用者實際資料, 同一般使用者)、
+    //'{token-for-appadmin}' 應用系統 token・使用者用途綁管理員 (同系統管理員)、'{token-for-appsys}' 應用系統 token・系統服務用途 (id 以 'app:' 開頭、isAdmin='y', 不綁使用者)
+    if (token === '{token-for-member}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-member', name: 'member', email: 'member@example.com', isAdmin: 'n' }
+    }
+    if (token === '{token-for-outsider}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-outsider', name: 'outsider', email: 'outsider@example.com', isAdmin: 'n' }
+    }
+    if (token === '{token-for-appuser}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-member', name: 'member', email: 'member@example.com', isAdmin: 'n', isApp: 'y' }
+    }
+    if (token === '{token-for-appadmin}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-admin', name: '測試者', email: 'admin@example.com', isAdmin: 'y', isApp: 'y' }
+    }
+    if (token === '{token-for-appsys}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'app:key-for-test', name: 'App key-for-test', email: 'app-key-for-test@example.com', isAdmin: 'y', isApp: 'y' }
+    }
+    //'{token-for-badrole}' / '{token-for-numid}' / '{token-for-hookmut}' 為測試用權杖 (test/api-callerMatrix C3-06 / C3-08, 受 NODE_ENV 守門):
+    //isAdmin 為 'Y' (非 'y' / 'n') 之使用者、id 為非字串之使用者 (皆應被 checkUser 拒絕); 一般使用者 id-for-hookmut (其 verifyClientUser / verifyAppUser 會嘗試改寫傳入之物件為管理員, 供驗本套件只交淺拷貝、角色與身分取自驗證當下之原物件)
+    if (token === '{token-for-badrole}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-badrole', name: 'badrole', email: 'badrole@example.com', isAdmin: 'Y' }
+    }
+    if (token === '{token-for-numid}' && process.env.NODE_ENV !== 'production') {
+        return { id: 12345, name: 'numid', email: 'numid@example.com', isAdmin: 'n' }
+    }
+    if (token === '{token-for-hookmut}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-hookmut', name: 'hookmut', email: 'hookmut@example.com', isAdmin: 'n' }
+    }
+    //'{token-for-incomplete}' 為測試用權杖 (test/api-callerMatrix C3-05, 受 NODE_ENV 守門): 解析為欄位不齊之使用者 (缺 email / name), 供驗執行身分須與連線閘同等完整 (欄位齊備) 而非只取 id
+    if (token === '{token-for-incomplete}' && process.env.NODE_ENV !== 'production') {
+        return { id: 'id-for-incomplete', isAdmin: 'y' }
+    }
     //未設定 SSO app token 時(本機開發未接SSO), 不打SSO直接拒絕
     if (!ssoAppToken) {
         console.log('ssoAppToken 未設定, 略過 SSO 驗證')
@@ -108,6 +142,11 @@ let getUserByToken = async (token) => {
     }
 }
 
+//isTestOrdinaryUser: 呼叫者存取矩陣之測試用一般使用者 (受 NODE_ENV 守門); 其餘一般使用者 (如 id-for-nonadmin) 仍被拒, 供 D17 之連線閘測試
+let isTestOrdinaryUser = (user) => {
+    return process.env.NODE_ENV !== 'production' && ['id-for-member', 'id-for-outsider'].includes(get(user, 'id', ''))
+}
+
 let verifyClientUser = (user, from) => {
     //不於每次呼叫印出使用者物件: 登入檢查與資料通道之連線閘(前端每 2 秒輪詢)皆經此函數 (spec D17; 同 w-web-perm srv.mjs)
     // console.log('verifyClientUser/user', user)
@@ -116,8 +155,14 @@ let verifyClientUser = (user, from) => {
     if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
         throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
     }
+    //測試用 (受 NODE_ENV 守門): id-for-hookmut 之鉤子嘗試把傳入之物件改為管理員 (id-for-admin / isAdmin='y') 後放行, 供驗本套件只交淺拷貝
+    if (get(user, 'id', '') === 'id-for-hookmut' && process.env.NODE_ENV !== 'production') {
+        user.isAdmin = 'y'
+        user.id = 'id-for-admin'
+        return true
+    }
     // return false //測試無法登入
-    return user.isAdmin === 'y' //測試僅系統管理者使用
+    return user.isAdmin === 'y' || isTestOrdinaryUser(user) //測試僅系統管理者使用 (另放行呼叫者存取矩陣之兩個一般使用者, 見 getUserByToken)
 }
 
 let verifyAppUser = (user, from) => {
@@ -128,8 +173,14 @@ let verifyAppUser = (user, from) => {
     if (get(user, 'id', '') === 'id-for-verify-throw' && process.env.NODE_ENV !== 'production') {
         throw new Error('SYNTH-VERIFY-SECRET-FOR-TEST')
     }
+    //測試用 (受 NODE_ENV 守門): 同 verifyClientUser 之 id-for-hookmut
+    if (get(user, 'id', '') === 'id-for-hookmut' && process.env.NODE_ENV !== 'production') {
+        user.isAdmin = 'y'
+        user.id = 'id-for-admin'
+        return true
+    }
     // return false //測試無法登入
-    return user.isAdmin === 'y' //測試僅系統管理者使用
+    return user.isAdmin === 'y' || isTestOrdinaryUser(user) //測試僅系統管理者使用 (另放行呼叫者存取矩陣之兩個一般使用者, 見 getUserByToken)
 }
 
 //WWebTask

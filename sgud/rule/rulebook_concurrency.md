@@ -148,7 +148,9 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 | `src/plugins/mDraft.mjs`、`src/plugins/mGridEdit.mjs` | `unit-draft`、e2e E2E-014 / 015 / 016 / 017 |
 | 前端清單頁(`LayoutContentChannels.vue` / `LayoutContentMembers.vue`) | `unit-draft`、e2e E2E-005 / 008 / 010 / 014 / 015 / 016 / 017(兩語系; 008 為聊天頁成員視窗共用 `LayoutContentMembers`) |
 | `server/procLang.mjs` 之 `deleteChannelConfirm` 等語系鍵 | 無標準圖含刪頻道確認框(`grep -n "deleteChannelConfirm" test/`: 0); 跑 `unit-procCore`、`unit-optRemoved` |
-| 共用基礎(測試輔助、版面共用元件、樣式、建置設定、w-serv-orm 升版) | 擴大至 e2e 全跑 + 全套 unit / api |
+| `server/access.mjs`(角色 / 成員檢查、入口函數表)、`server/WWebTask.mjs` 之 `authToken` / `getUserIdByToken` / `kp` / `operOrm` / `sysFuncsPublic`、`srv.mjs` 之測試權杖(task-run01, D20) | `unit-access`、`api-callerMatrix`(462 格)、`api-dataChannel`、`api-tokenLeak`、`unit-authorizeExec`、`unit-optRemoved`、`unit-procCore`、`api-agent`、`api-files`、`api-doubleclick`、`api-concurrency`; 改到連線與同步(`sysFuncsPublic`、w-serv-hapi 升版)→ e2e 全跑 |
+| `src/plugins/mAccess.mjs`、`Rail.vue` 之 `navItems`、`LayoutContentMembers.vue` 之編輯開關(D20 前端) | `unit-mAccess`; e2e 恆以管理員登入故畫面不變, 跑 E2E-001～017 全部(Rail 為每案共用) |
+| 共用基礎(測試輔助、版面共用元件、樣式、建置設定、w-serv-orm 與 w-serv-hapi 升版) | 擴大至 e2e 全跑 + 全套 unit / api |
 
 ### 9.8 第三輪(2026-10-23, 任務 task-run02, 修正輪): 刪頻道移入封存表(Q2)與編輯器開啟中視同草稿(N1)
 

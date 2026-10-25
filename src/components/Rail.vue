@@ -125,6 +125,7 @@ import { mdiClipboardFlowOutline, mdiChartBoxOutline, mdiForumOutline, mdiCogOut
 import get from 'lodash-es/get.js'
 import isestr from 'wsemi/src/isestr.mjs'
 import WIcon from 'w-component-vue/src/components/WIcon.vue'
+import { canManage } from '../plugins/mAccess.mjs'
 
 
 export default {
@@ -163,7 +164,26 @@ export default {
         vo.showLangSelect = showLanguage === 'y'
 
     },
+    watch: {
+
+        //明確為非管理員而區段停在後台 (如使用者資料晚於畫面取得) 時改回頻道區 (便利性, 後端為權威; 見 src/plugins/mAccess.mjs)
+        canManageSelf: {
+            immediate: true,
+            handler: function(v) {
+                let vo = this
+                if (!v && vo.section === 'admin') {
+                    vo.$store.commit(vo.$store.types.UpdateSection, 'channels')
+                }
+            },
+        },
+
+    },
     computed: {
+
+        canManageSelf: function() {
+            let vo = this
+            return canManage(vo.userSelf)
+        },
 
         section: function() {
             let vo = this
@@ -201,9 +221,10 @@ export default {
             return c.toUpperCase()
         },
 
+        //canManage: 明確為非管理員者隱藏後台入口 (便利性; 管理類函數由後端限系統管理員, 見 src/plugins/mAccess.mjs)
         navItems: function() {
             let vo = this
-            return [
+            let items = [
                 {
                     key: 'stats',
                     label: vo.$t('mmStats'),
@@ -214,12 +235,15 @@ export default {
                     label: vo.$t('mmChannels'),
                     icon: mdiForumOutline,
                 },
-                {
+            ]
+            if (vo.canManageSelf) {
+                items.push({
                     key: 'admin',
                     label: vo.$t('mmAdmin'),
                     icon: mdiCogOutline,
-                },
-            ]
+                })
+            }
+            return items
         },
 
     },

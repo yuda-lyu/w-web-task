@@ -115,6 +115,20 @@
 - **前端 e2e 之負向觀察窗**: 驗「未被重建」須在推播進 store 後給一段觀察時間再驗編輯器仍在(以 store 內容為終態訊號偵測推播已到, 再固定 0.5 秒); 此為觀察「沒發生」之必要等待, 非同步手段.
 - **swap 式修前紅**: 前端修前紅以 `cp` 把 HEAD 版元件換進 `src/`(備份在 `tmp/`)再 `cmp` 驗證與還原; 不用腳本改寫 repo 檔, 變異驗證之前端變異以 Edit 工具逐一施加與還原, 每輪結束 `cmp` 比對備份.
 
+## 呼叫者身分驗證與存取矩陣(2026-10-25, task-run01; 規則見 `rulebook_security.md` R-AUTHZ-01～10, 決策見 `spec/設計要點與取捨.md` D20)
+
+- **先建矩陣再修**: 修前以真後端實測入口 × 呼叫者, 初版 70 案中 65 案紅、102 格不符(一般使用者可建 / 刪頻道與成員、任一通過連線閘者可讀寫任一頻道、`getChannelsList` / `getStats` / `channels.select` 回整表、檔案無關卡、`[sys:polling]` 無 token 放行)。**意料之外的一格**: `ackChannel` 缺列路徑會替任何通過連線閘者(含非成員)自動建立成員列, 即「自我加入任何頻道」——修前矩陣中它甚至會污染其後各格(非成員變成成員), 故 ack 兩列置最後。
+- **資料通道函數只收 `userId`**: w-serv-webdata 的 `execFun` 只把 `getUserIdByToken` 的回傳值交給函數, 函數內無從得知角色。本套件以「驗證通過當下登錄 userId → 角色(60 秒、單行程記憶體)」解(同 w-web-perm 的 `kpSystemAppIds` 作法), 並讓 `callerOf` 在無登錄 / 逾期時一律拒絕。**不要**用 AsyncLocalStorage `enterWith` 從 `getUserIdByToken` 帶出去: 被 `await` 的 async 函數內 `enterWith` 不會回到呼叫端的後續延續。
+- **`sysFuncsPublic` 在本套件的實際效果**: `execFun` 先呼叫 `getUserIdByToken` 才處理 `[sys:getFuncList]`, 而本套件的 `getUserIdByToken` 對空 token fail-closed, 故函數呼叫路徑本來就沒有匿名可通; 且 `verifyConn` 已拒無 `Authorization`。真正新增的防線只有**輪詢**: `genPollingGate` 對「缺 `__sysToken__` 鍵」(已發布的舊前端元件)以無身分處理, 預設公開時放行——收緊後「標頭 token 有效、本體缺 / 空 token」的輪詢被拒。測試要用這個形狀(裸封包 `{ clientId }`)才分得出紅綠。
+- **`npm run build` 會清掉 `dist/` 內 `index.tmp` 與 `w-web-task.umd.js`**: 完整產物須再跑 `node toolg/genEntry.mjs`(index.html → index.tmp)與 `node toolg/gDistRollup.mjs`(後端 umd, 順便驗證新模組可被 rollup 打包); 不跑 `cleanFolder`(會清 `docs/`)、不碰 `script.txt` 之發布步驟。
+- **變異腳本**(`mutate.mjs`, 暫存檔不在 repo, 備份於任務報告資料夾 `task-run01-evidence/`; 執行時外層已持測試鎖者須設 `MUTATE_NOLOCK=1`, 否則內層再取鎖會死等; 變異之 `from` 字串於程式改版後可能不再恰出現一次而被略過, 腳本會印 SKIP——程式改動後務必核對所有變異皆實際施加): 對 `server/access.mjs` / `server/WWebTask.mjs` 逐一單點替換 → 持測試鎖跑 `unit-access` + `api-callerMatrix` → 立即還原 → 全程結束以 SHA-256 回驗與原檔相同。**變異期間不得編輯這兩個檔**(會被還原覆蓋); 變異的 `from` 字串須在檔內恰出現一次(腳本先驗)。
+- **e2e 全跑偶發 `page.goto: net::ERR_NO_BUFFER_SPACE`**(Windows 網路緩衝耗盡, 與程式無關; 34 案中第 1 案 cht E2E-001 一次, 同一案其後重跑通過): 屬環境暫時性, 先看錯誤字樣再判斷, 不要當成程式迴歸。
+- **外審 C 類(Claude API 額度)的金鑰**: 技能根的 `w-dispatch-ai` 1.0.55 的 `dispatchClaude` 無 `key` 參數(僅 `env`); 於 Claude Code session 內派出的子程序會繼承 `CLAUDE_CODE_*` 等連結變數而沿用訂閱。作法: 派工腳本(detached)在呼叫前自 `process.env` 刪除 `CLAUDE*` / `ANTHROPIC*` / `AI_AGENT` / `MCP_CONNECTION_NONBLOCKING`, 再以 `env: { ANTHROPIC_API_KEY }` 傳金鑰, stream-json 的 init 事件 `apiKeySource` 確認為 `ANTHROPIC_API_KEY`; 金鑰只在記憶體, 輸出以 `[KEY]` 取代後才落檔。
+- **外審(opus-5.5〔API 額度〕+ gpt-6.1-sol)後之補修**: ①**授權檢查與執行之空窗在「會寫出持久權限」之入口不可當毫秒級忽略**——`ackChannel` 缺列路徑會建成員列, 授權通過後成員列被管理員移除, 缺列路徑即把被移除者永久加回; 修法是能力旗標(`allowInsert`, 一般使用者不得建列)而非加鎖, 測試以「閘門停在授權檢查之後、移除成員列、放行」之人為交錯(`unit-access` A11)。②**交給部署方鉤子之物件一律淺拷貝, 且是所有站點**(連線閘 / 執行身分 / HTTP `verifyAppUser`)——第一輪只做了前兩者, HTTP 路由漏掉, 被兩位審查者同時指出; 檢查「同型站點是否對稱」要用 grep 列全集而非憑記憶。③**登記角色之表要帶驗證開始序號**: 同 userId 並行驗證之完成順序可顛倒。④登入檢查回應與認證失敗 console 一律經 `pickUser` 白名單(部署方物件可能夾帶機密欄位; 前端 `userSelf` 只讀 id / name / isAdmin)。⑤連線閘須驗 `Bearer` 方案(原無條件刪前 7 字元)。⑥**變異驗證不等於測試完整**: 18 個變異全被抓到之後, 兩位審查者仍找出 4 個測試漏洞(冷表無內容、游標值、修改既有列、clientId 綁定)——變異集合只涵蓋我想到之改動, 外審補的是我沒想到之改動。⑦**snapshot 時點**: 審查快照早於其後之文件補寫, 審查者會誤報已補之處(如 R-AUTHZ-10); 評分表須註明快照時點。
+- **測試以「基準先綠才跑變異」**: 變異以「有測試失敗」判被抓到, 基準本身已紅(例如新加之測試案有誤)時每個變異都「被抓到」而無意義; 變異腳本之外層(`run-all`)於基準未全綠時略過變異。另: **測試之人為交錯須有上限**——A11 把閘門停在授權檢查之後, 若授權檢查被略過(變異), 停點落在 ack 之實體鎖內而與刪除成員互鎖, 測試會懸置至 mocha 逾時(每個變異 600 秒); 改為各等待設上限、逾時即斷言失敗。
+- **外審快照**: 審查者讀「快照」而非工作樹(`tmp/task-run01/review/snap/`, 由腳本複製並把註解 / 文件中的敏感字樣中性化、另附 `changes.diff`); 變異腳本與審查可並行而不互相影響。
+- **unit 層以專案根為 cwd 呼叫真 `procCore.saveFile` 會在專案根 `./dbf`(git 忽略)落檔**(`procCore.mjs:16` / `:534`): 測試只清「已知 id」不夠——被測碼錯誤放行(如變異驗證、或日後迴歸)時,「本應被拒」之上傳反而成功、斷言在取得 id 之前中止, 檔案即殘留。作法: 在 `finally` 以 `./dbf` 目錄「測前 / 測後」差集刪除本案新增之檔(`unit-access` A7); 全套(含變異)跑完後以 `ls -A dbf` 回驗為 0。矩陣(`api-callerMatrix`)走 harness 實例, 檔案寫在 `test/_tmp/e2e-harness/root/dbf` 隨 harness 清除, 不受影響。
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

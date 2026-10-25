@@ -10,7 +10,7 @@
     "w-aggrid-vue": "^2.1.9",
     "w-component-vue": "^2.5.31",
     "w-data-collector": "^1.0.47",
-    "w-serv-hapi": "^1.1.7",
+    "w-serv-hapi": "^1.1.8",
     "w-serv-orm": "^1.1.17",
     "w-syslog": "^1.0.34",
     "w-ui-loginout": "^1.0.33",

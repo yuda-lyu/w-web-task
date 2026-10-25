@@ -117,6 +117,47 @@ node g.initialData.mjs        # 初始化 DB (種子: demo 頻道)
 - **前端 (編輯器開啟中)**: 後台頻道頁 / 成員頁之儲存格編輯器已開啟、已輸入未按 Enter 時收到推播, 不再重建 (原頻道頁會整張重建, 編輯器被關閉、輸入靜默丟失), 並顯示草稿提示條 (新增 `src/plugins/mGridEdit.mjs`; 無語系鍵變更).
 - **稽核既有資料之重複** (升版後後台存檔被 `errChannelNameDuplicate` / `errMemberDuplicate` 擋下時): 頻道名稱重複以 `getChannelsList` 依 `name` 分組; 成員重複以 `getChannelMembers(channelId)` 依 `memberId` 分組, 於後台成員頁 (重複儲存格有警告圖示) 刪除多餘列.
 
+## Security: identity verification responsibility (身分驗證責任、角色與頻道成員)
+
+> 身分驗證責任：框架（w-converhp、w-serv-hapi、w-serv-webdata、w-serv-orm）不驗證 token，一律由本套件負責。連線閘（`verifyConn`）與執行身分（`getUserIdByToken`）皆須完整驗證（token 有效、本系統使用者存在且啟用、部署方授權）；hapi `apis` 路由各自驗證；函數層級另檢查角色或成員；公開入口只限列名者。（跨套件原則：opensrcOper `dspec/使用者身分驗證原則.md`；設計 `spec/設計要點與取捨.md` D20）
+
+**角色與成員的定義**
+
+- **系統管理員** ＝ `getUserByToken` 所回使用者之 `isAdmin` 嚴格等於 `'y'` (本套件無自有使用者表, 以 token 反查結果為權威; 判準單一擁有者 `server/access.mjs` 之 `isAdminUser`). 應用系統 token (SSO `isApp='y'`): **使用者用途** (綁定使用者) 反查回所綁使用者之實際資料, 等級同該使用者; **系統服務用途** (不綁使用者) 反查回 `id='app:<金鑰主鍵>'`、`isAdmin='y'`, 等級為系統管理員. 本套件不讀 `isApp`; 是否簽發系統服務用途或綁管理員之應用系統 token 由專案方負責.
+- **頻道成員** ＝ `channelMembers` 中 `(channelId, memberId = 呼叫者 id, isActive = 'y')` 之列. 本套件**不設頻道管理者角色** (`channelMembers.role`、`channels.ownerId` 為後台可編之自由欄位, 不作授權依據).
+- **執行身分** (`getUserIdByToken`, 資料通道請求本體之 `__sysToken__`) 與連線閘 (標頭 `Authorization`) 共用同一個完整驗證 (token 認證 + 部署方 `verifyClientUser`, `from` 為 `'main'`): 兩個 token 各自完整驗證, 函數以**本體 token 之使用者**執行; 驗證不過函數不執行 (`errUserIdMissing`, 原因只入 srLog).
+
+**入口與呼叫者** (資料通道與 HTTP REST 共用同一張入口函數表; 不通過者零寫入)
+
+| 入口 | 誰可用 | 不通過 |
+|---|---|---|
+| 靜態前端檔 (index.html 與建置檔) | 任何人 (公開入口, 本質上還拿不到 token) | — |
+| `[sys:getFuncList]` | 設定上列為公開 (`sysFuncsPublic`), 但資料通道一律先經 `getUserIdByToken` 且其對空 token fail-closed, 實際仍須有效身分 | `permission denied` / `errUserIdMissing` |
+| `[sys:polling]`、`[sys:getTableTags]` | 有效身分 (輪詢帶 `__sysToken__`) | `permission denied` |
+| 登入檢查 `GET /api/getUserByToken`(只回 `id / name / email / isAdmin`)、資料通道 `getWebInfor` | 任一通過 `verifyClientUser` 者 | 登入檢查 `errUserNoPermission`(認證失敗為 `errUserNotFound` 等);資料通道 `permission denied`(連線閘)/ `errUserIdMissing`(本體 token) |
+| 頻道管理類: `saveChannels` / `deleteChannels` / `saveChannel` / `deleteChannel` / `saveChannelMembers` / `deleteChannelMembers` / `saveChannelMember` / `deleteChannelMember` (資料通道) | **系統管理員** | `errUserNotAdmin` |
+| 頻道內容: `getChannelMembers`、`getMessages`、`postMessage`、`getTasks`、`getArchivedTasks`、`getArchivedMessages`、`ackChannel` (資料通道) 與對應 HTTP `getRecentMessages` / `postMessage` / `getRecentTasks` / `getArchivedTasks` / `getArchivedMessages` / `ackChannel` | 系統管理員或**該頻道成員** | `errChannelNotMember` |
+| 任務: `getTask`、`claimTask`、`respondTask`、`resetTask` (資料通道與 HTTP) | 系統管理員或**任務所屬頻道成員** | `errTaskNotFound` (非成員與查無同回, 不洩漏存在與否) |
+| 檔案: `uploadFile`、`getFileInfo`、HTTP `getFile` | 系統管理員或**任一頻道成員** | `errChannelNotMember` |
+| 清單與統計: `getChannelsList` / `GET /api/getChannels`、`getStats` / `GET /api/getStats`、資料通道 `channels.select` / `channelMembers.select` | 任一已驗證者, **只回有權看之頻道**之資料 (管理員全部) | — (收斂, 不拒絕) |
+| 通訊路由 `ulctr` / `slc` / `dwgfn` / `dwgf` / `dw` | 本套件未註冊監聽, 一律不受理 | — |
+
+完整矩陣 (入口 × 呼叫者: 無 token / 一般使用者〔成員、非成員〕/ 系統管理員 / 應用系統〔使用者用途綁一般使用者、綁管理員、系統服務用途〕, 共 462 格) 由 `test/api-callerMatrix.test.mjs` 以真後端實測.
+
+#### Upgrade Notes (身分驗證與存取矩陣, 2026-10-25, D20)
+
+- **相依**: `w-serv-hapi` `^1.1.8` (連帶 w-serv-webdata 1.1.16、w-serv-broadcast 1.1.12). 後端設 `sysFuncsPublic: ['[sys:getFuncList]']`; 前端元件隨升版, 輪詢帶 token. **已發布之舊前端建置檔輪詢不帶 token, 升版後被拒 (使用者需重新載入頁面)**.
+- **一般使用者 (`isAdmin≠'y'`) 不再能做管理類操作** (頻道與成員之建立 / 修改 / 刪除): 回 `errUserNotAdmin`. 原只要通過部署方 `verifyClientUser` 即可; 部署方只能在本套件之檢查上再收緊.
+- **頻道內容限成員**: 一般使用者只能讀寫自己為成員之頻道; 非成員回 `errChannelNotMember` (任務為 `errTaskNotFound`). **agent 若以一般使用者 (或綁一般使用者之應用系統 token) 認證, 其 `user.id` 須為頻道成員**: `channel.agentId` 等於其 `user.id` 時存檔會自動建立 agent 成員列 (建議作法); `channel.agentId` 為友善名稱而 `user.id` 不同者, 須由管理員於成員頁加入其 `user.id` 為成員. 原本 `ackChannel` 缺列路徑會替任何通過連線閘者自動建立成員列 (等同自我加入任何頻道), **現僅管理員可建列(既有成員只更新自己的游標列; 授權通過後成員列才被管理員移除者亦不得加回)**. 以系統服務用途之應用系統 token (`isAdmin='y'`) 認證之 agent 與管理員不受影響.
+- **升版時稽核 `channelMembers`(升版前遺留之成員列即授權)**: 修前任何通過連線閘者可經 `ackChannel` 缺列路徑自我加入任何頻道、一般使用者亦可經管理類函數為自己加列, 這些列升版後仍在, 而成員資格現在即存取權. 稽核: 以管理員 token 對各頻道呼叫 `getChannelMembers(channelId)`, 自建列之特徵為 `userId === memberId`(建立者即成員本人, 多為 `memberType==='agent'`); 預期之 agent 成員(由 `saveChannel` 依 `agentId` 自動建立者之 `userId` 為存檔之管理員)不符此特徵, 符合者逐一確認後於成員頁刪除非預期者. **管理員降級時**: 管理員(含 `isAdmin='y'` 之 agent)以非成員身分 `ackChannel` 會替自己建游標列(agent 之已讀游標須有列), 該帳號日後降為一般使用者時這些列使其仍為該頻道成員——降級時須同步清理其成員列.
+- **其他變更**: ①連線閘只認 `Authorization: Bearer <token>`(方案名不分大小寫、其後一個以上空白), 其他方案與缺憑證視為未帶 token(原無條件刪前 7 字元); ②`GET /api/getUserByToken` 只回 `id / name / email / isAdmin` 四欄(原樣回傳部署方之物件; 前端 `userSelf` 只讀此四欄), 認證失敗之後端 console 亦只印此四欄; ③HTTP `verifyAppUser` 與資料通道之 `verifyClientUser` 同樣只收使用者物件之淺拷貝(鉤子改寫傳入之物件不影響本套件之角色與身分判斷).
+- **清單與統計收斂**: 一般使用者之 `getChannelsList` / `getChannels` / `getStats` 與資料通道 `channels.select` / `channelMembers.select` 只含所屬頻道 (原回整表).
+- **檔案**: `uploadFile` / `getFileInfo` / `getFile` 限系統管理員或任一頻道成員.
+- **執行身分**: 資料通道每個函數呼叫前之 `__sysToken__` 驗證由「只取 token 對應之 id」改為與連線閘同等完整 (認證 + `verifyClientUser(淺拷貝, 'main')`): 缺 `id / email / name / isAdmin` 欄位或被 `verifyClientUser` 拒絕者, 函數不執行. `verifyClientUser` 每個資料通道函數呼叫多被呼叫一次 (`from` 為 `'main'`), 收到的是使用者物件之淺拷貝.
+- **語系鍵**: `server/procLang.mjs` 新增 `errUserNotAdmin`、`errChannelNotMember` (eng + cht); 自訂 `kpLang` 覆寫者請補.
+- **前端**: 明確為非管理員 (`isAdmin='n'`) 者隱藏後台入口與頻道聊天頁成員視窗之編輯開關 (便利性; 後端為權威); 管理員畫面不變.
+- **自行建構者**: `createAccess` / `createGuardedFuncs` 於 `server/access.mjs`; 使用 `WWebTask(...)` 入口者無須動作. 自行建構 `procCore` 者: `getStats(userId, scope)` 新增選用參數 `scope` (頻道 id 的 Set; 不給為全系統)、`ackChannel(userId, channelId, lastMessageId, allowInsert = true)` 新增選用參數 `allowInsert` (缺列時是否可建列; 預設同修前, 入口邊界對一般使用者傳 `false`).
+
 ### agent 處理訊息附件 (圖片/檔案)
 訊息的 `attachments` 為 file id 陣列 (非 base64, 省 token). agent 看到附件時: `GET /api/getFileInfo?token=&id=<fileId>` 取原始檔名/type/size → `GET /api/getFile?token=&id=<fileId>` 取實際 bytes 檢視. 自己要發帶圖訊息: 先 `POST /api/uploadFile` 取 file id, 再 `postMessage(..., attachments:[id])`.
 
@@ -162,6 +203,7 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 ```bash
 npx mocha test/unit-procCore.test.mjs --reporter list      # 單元 (procCore 邏輯/狀態守衛)
 npx mocha test/api-agent.test.mjs --reporter list           # API 契約 (agent HTTP 生命週期)
+npx mocha test/api-callerMatrix.test.mjs --reporter list    # 呼叫者存取矩陣 (入口 × 呼叫者 462 格; 身分驗證 / 角色 / 頻道成員)
 node test/e2e-channeltask.test.mjs --baseline               # 產製 e2e 標準圖
 npx mocha test/e2e-channeltask.test.mjs --reporter list     # e2e (Playwright + pixel baseline: 感知容差比對, 非 byte-exact; 雙語)
 npm test                                                     # mocha 全跑 (test/*.test.mjs)
@@ -173,7 +215,7 @@ e2e 規範詳 skill `role-coder-for-test-e2e` 與 `spec/流程_*.md`.
 
 `srv.mjs` 注入 `getUserByToken(token)`: dev 捷徑 `sys`/`agent-demo` (NODE_ENV !== production); 否則打 SSO `GET ${ssoBaseUrl}/api/getSsoUserInfor?token=${ssoAppToken}&key=token&value=${token}` 解析 user. 部署需在 `g.getSettings.mjs` 填 `ssoBaseUrl` 與 `ssoAppToken` (SSO tokens 表中 isApp='y' 之 app token).
 
-**agent 身分 (建議用 SSO app token)**: agent 為機器角色, 建議由 SSO 管理員核發 **app token** (tokens 表 isApp='y', `userId` 欄填 agent 識別碼) 作為其認證 token — SSO 解析 app token 時回傳虛擬使用者 (id=token.userId, name/email 為占位值, isAdmin='y', 視同已驗證), 無須為每個 agent 建立真人帳號與 email, 適合大量 agent 部署. 解析出的 user.id 即 agentId (須等於主責頻道 channel.agentId). 一般使用者 token 亦可作為 agent 認證, 但其 user 須四欄齊全 (id/email/name/isAdmin — 對外 API 之 `getAndVerifyAppUser` 與瀏覽器端同樣走 `checkUser` 檢查).
+**agent 身分 (建議用 SSO app token)**: agent 為機器角色, 建議由 SSO 管理員核發 **app token** (tokens 表 isApp='y') 作為其認證 token, 無須為每個 agent 建立真人帳號與 email. 兩種用途 (w-web-sso 1.1.15 起, 見 `Security` 一節): **使用者用途** (綁定使用者) 反查回所綁使用者之實際資料, 等級同該使用者 —— 綁一般使用者者須為頻道成員 (`user.id` 即 agentId, 須等於主責頻道 channel.agentId, 存檔時自動建 agent 成員列); **系統服務用途** (不綁使用者) 反查回 `id='app:<金鑰主鍵>'`、`isAdmin='y'`, 等級為系統管理員 (可存取全部頻道; 是否簽發由專案方負責). 一般使用者 token 亦可作為 agent 認證, 但其 user 須四欄齊全 (id/email/name/isAdmin — 對外 API 之 `getAndVerifyAppUser` 與瀏覽器端同樣走 `checkUser` 檢查).
 
 ## 套件化
 

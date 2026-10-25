@@ -69,7 +69,8 @@
                 style="padding:5px; border-top:1px solid var(--border); display:flex; align-items:center;"
             >
 
-                <div data-fmid="members-edit-switch" style="padding:6px 0px 4px 4px;">
+                <!-- 編輯開關: 明確為非管理員者隱藏 (便利性; 成員管理類函數由後端限系統管理員, 見 src/plugins/mAccess.mjs) -->
+                <div v-if="isManager" data-fmid="members-edit-switch" style="padding:6px 0px 4px 4px;">
                     <WSwitch
                         :checkedSwitchCircleColor="'#F68200'"
                         :checkedSwitchCircleColorHover="'#FB8C00'"
@@ -259,6 +260,7 @@ import WAggridVue from 'w-aggrid-vue/src/components/WAggridVue.vue'
 import getMembersContract from '../schema/contracts/channelMembers.mjs'
 import { isStaleKey, calcBaseline, isStale, isDirty, countDuplicates, removeFromBaseline } from '../plugins/mDraft.mjs'
 import { isEditorOpen, onceEditorStopped } from '../plugins/mGridEdit.mjs'
+import { canManage } from '../plugins/mAccess.mjs'
 
 
 export default {
@@ -351,6 +353,14 @@ export default {
         this.clearEditorWatch()
     },
     watch: {
+
+        //明確為非管理員時收回編輯模式 (使用者資料晚於畫面取得時, 已開啟之編輯模式不殘留; 便利性, 後端為權威)
+        isManager: function(v) {
+            if (!v) {
+                this.isEditable = false
+            }
+        },
+
         channelItems: {
             immediate: true,
             handler: function(cs) {
@@ -373,6 +383,11 @@ export default {
         },
     },
     computed: {
+
+        isManager: function() {
+            let vo = this
+            return canManage(get(vo, '$store.state.userSelf', {}))
+        },
 
         syncState: function() {
             let vo = this

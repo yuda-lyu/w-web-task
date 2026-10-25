@@ -2,13 +2,13 @@
 
 本檔只記**現況**(各功能做到哪裡、對應之規則帳本條目與測試檔、已知缺口與待辦、最近一次驗證或發布之版本); 過程與教訓見 `sgud/exp/experience.md`。接續工作先讀本檔。規則帳本索引見 `sgud/rule/rulebook.md`(2026-10-22 起依類型分冊)。
 
-更新: 2026-10-23(任務 task-run02: 第三輪修正輪——刪頻道移入封存表、編輯器開啟中視同草稿)
+更新: 2026-10-25(任務 task-run01〔20261025111554〕: 呼叫者身分驗證——C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊)
 
 ## 版本與驗證
 
-- 套件版本 `1.0.35`(`package.json`, 本輪未動版本; run01 成果已由主控以本機檢查點提交 `50d9a11`)。本輪(run02)改動在工作樹, 未提交。相依: `w-serv-orm` `^1.1.17`。
-- 最近一次完整驗證(全套)為主控於 run01 後所跑(383 passing); 本輪(2026-10-23 run02)**未跑全套**(主控最末輪於凍結碼跑一次), 只跑受影響者:
-  - 非瀏覽器: `unit-procCoreConcurrency` 94(含新增「Q2」節 22 案)、`unit-procCore` 52、`unit-draft` 22、`api-concurrency` 9(含 Q2 一案)等, 結果見任務報告; e2e `E2E-005 / 008 / 010 / 014 / 015 / 016 / 017` 兩語系 compare(既有標準圖 0 張改變; 新增 6 張: E2E-016 / 017)。細節見任務報告 `task-run02-修正報告.md`。
+- 套件版本 `package.json` 記 `1.0.36`(本輪未動版本; 前一輪成果已由主控以本機檢查點提交)。本輪(task-run01, 2026-10-25)改動在工作樹, 未提交。相依: `w-serv-orm` `^1.1.17`、**`w-serv-hapi` `^1.1.8`(本輪升; 連帶 w-serv-webdata 1.1.16、w-serv-broadcast 1.1.12)**。
+- 本輪(2026-10-25 task-run01)驗證(凍結碼): `unit-*` + `api-*` 全跑 **478 passing / 0 failing**(含新增 `api-callerMatrix` 79 案〔66 列 × 7 類呼叫者 = 462 格 + 13 案〕、`unit-access` 13、`unit-mAccess` 3); e2e(`e2e-channeltask`, 改到連線與同步而擴大為全跑)**34 passing**; 真瀏覽器(一般使用者 / 非成員 / 管理員)驗收 16 / 16; 變異 25 個全數被抓到(0 存活); 外審 opus-5.5〔API 額度〕+ gpt-6.1-sol, 其補修已納入。既有標準圖 0 張改變。細節見任務報告 `task-run01-修正報告.md`; 主控於最末輪跑全套。
+- 前一輪(2026-10-23 run02)驗證: 非瀏覽器 `unit-procCoreConcurrency` 94(含新增「Q2」節 22 案)、`unit-procCore` 52、`unit-draft` 22、`api-concurrency` 9(含 Q2 一案)等; e2e `E2E-005 / 008 / 010 / 014 / 015 / 016 / 017` 兩語系 compare(既有標準圖 0 張改變; 新增 6 張: E2E-016 / 017)。
 
 ## 功能現況
 
@@ -21,6 +21,7 @@
 | 冷熱分離封存 `archiveSweep`(D12) | 已上線(啟動後 30 秒首掃 + 每小時); **逐筆 `task:<id>` 鎖後重讀再搬(E2 已修)** | `rulebook_backend.md` D12; `rulebook_concurrency.md` | `unit-procCore`(封存案)、`unit-procCoreConcurrency` E2 三案 |
 | 圖檔 `uploadFile` / `getFile`(D10) | 已上線; 僅點陣圖白名單 inline | `rulebook_backend.md` D10 | `api-files` |
 | 資料通道只開 `select`(D17) + 連線閘 | 已上線 | `rulebook_backend.md` D17-1～3 | `api-dataChannel`、`unit-authorizeExec`、`unit-optRemoved` |
+| **呼叫者身分驗證與存取矩陣(D20, task-run01)**: 執行身分(`getUserIdByToken`)與連線閘 / 登入檢查共用 `authToken` 完整驗證(C3); 管理類限系統管理員、頻道內容 / 任務 / 檔案限成員或管理員、清單 / 統計 / 表 select 收斂為所屬頻道(C2 / C2b); 系統函數只公開 `[sys:getFuncList]`(第 128 項) | **已實作**(2026-10-25); 角色 ＝ token 反查 `isAdmin==='y'`(不讀 `isApp`, 不設頻道管理者); 授權只在入口函數表 `createGuardedFuncs`(`server/access.mjs`)套用一次, procCore 不變; 前端 `canManage` 對 `isAdmin==='n'` 隱藏後台入口與成員視窗編輯開關(便利, 後端為權威) | `rulebook_security.md` R-AUTHZ-01～10 | `api-callerMatrix`(462 格 + 13 案)、`unit-access`、`unit-mAccess` |
 | 權杖外洩防護(D15) | 已上線 | `rulebook_security.md` | `api-tokenLeak`、`unit-maskLog`、`unit-wrapInjected` |
 | 按鈕雙擊防護(D16) | 已上線(前端 `runSubmit`、後端 `lockSave`; 「確保成員列」之原子化由 D18 之表鎖取代原共用 kmx key) | `rulebook_backend.md` D16; `rulebook_ui.md` | `unit-submitGuard`、`unit-lockSave`、`api-doubleclick` |
 | 前端 UI(RWD D13、i18n、彈窗) | 已上線; 後台頻道 / 成員頁新增草稿保護提示條與成員重複之警告圖示; **儲存格編輯器開啟中(已輸入未按 Enter)收到推播視同草稿**(不重建、凍結基準、提示; 編輯器關閉後依一般規則; N1 已修) | `rulebook_ui.md`; `rulebook_concurrency.md` R-CONC-09 | `unit-rwd`、`unit-draft`; e2e E2E-016 / 017 |

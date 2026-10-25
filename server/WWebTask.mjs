@@ -11,7 +11,6 @@ import isfun from 'wsemi/src/isfun.mjs'
 import ispm from 'wsemi/src/ispm.mjs'
 import cint from 'wsemi/src/cint.mjs'
 import strleft from 'wsemi/src/strleft.mjs'
-import strdelleft from 'wsemi/src/strdelleft.mjs'
 import strright from 'wsemi/src/strright.mjs'
 import strdelright from 'wsemi/src/strdelright.mjs'
 import pm2resolve from 'wsemi/src/pm2resolve.mjs'
@@ -27,6 +26,7 @@ import procLang from './procLang.mjs'
 import procCore from './procCore.mjs'
 import createLockSave from './lockSave.mjs'
 import createAuthorizeExec from './authorizeExec.mjs'
+import { createAccess, createGuardedFuncs } from './access.mjs'
 import srLogInit from './srLog.mjs'
 import { maskTok, maskQuery } from './maskLog.mjs'
 import { wrapInjected } from './wrapInjected.mjs'
@@ -36,13 +36,19 @@ import ds from '../src/schema/index.mjs'
 /**
  * 任務調度伺服器
  *
+ * 身分驗證責任：框架（w-converhp、w-serv-hapi、w-serv-webdata、w-serv-orm）不驗證token，一律由本套件負責。連線閘（verifyConn）與執行身分（getUserIdByToken）皆須完整驗證（token有效、本系統使用者存在且啟用、部署方授權）；hapi apis路由各自驗證；函數層級另檢查角色或成員；公開入口只限列名者。
+ * 本套件之落實：連線閘、執行身分（資料通道本體__sysToken__，from固定為'main'）、登入檢查共用同一個完整驗證（token認證＋verifyClientUser）；本套件無自有使用者表，「使用者存在且啟用」由getUserByToken查無即回null保證。
+ * 函數層級（資料通道與HTTP REST共用同一張入口函數表，server/access.mjs）：管理類（頻道與成員之建立、修改、刪除）限系統管理員；訊息、任務、已讀游標、成員名冊限系統管理員或該頻道成員；檔案限系統管理員或任一頻道成員；頻道清單、統計、資料通道之channels／channelMembers的select只回呼叫者有權看之頻道之資料。
+ * 系統管理員＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理員）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
+ * 公開入口（無須token）只有前端靜態檔；/api/*與資料通道一律須token，系統函數只公開'[sys:getFuncList]'（且本套件之getUserIdByToken對空token fail-closed）。
+ *
  * @class
  * @param {Function} WOrm 輸入資料庫ORM函數
  * @param {String} url 輸入資料庫連線字串，例如w-orm-lmdb為'./db'
  * @param {String} db 輸入資料庫名稱字串
- * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'
- * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於登入檢查(/api/getUserByToken，from為'getUserByToken')與前端資料通道之每次請求(連線閘，from為w-converhp之apiType如'main')，兩者同一判定；拋錯或reject視同不允許
- * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from，為API名稱)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於對外HTTP REST API(agent面)；拋錯或reject視同不允許
+ * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'；本套件以'isAdmin'為'y'者為系統管理員（角色之唯一來源，函數層級之管理類限此類使用者），其餘為一般使用者（只能存取自己為成員之頻道）
+ * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件之淺拷貝與來源字串(from)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於登入檢查(/api/getUserByToken，from為'getUserByToken')與前端資料通道之每次請求(連線閘，from為w-converhp之apiType如'main'；執行身分每個函數呼叫前再驗一次，from為'main')，三者同一判定；拋錯或reject視同不允許。本套件於此函數通過後另自行要求角色與成員（見上），部署方只能在其上再收緊
+ * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from，為API名稱)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於對外HTTP REST API(agent面)；拋錯或reject視同不允許。本套件於此函數通過後另自行要求角色與成員（管理類不在HTTP REST；頻道內容限系統管理員或頻道成員），部署方只能在其上再收緊
  * @param {Object} [opt={}] 輸入設定物件，預設{}
  * @param {Integer} [opt.serverPort=11008] 輸入伺服器通訊port，預設11008
  * @param {String} [opt.subfolder=''] 輸入網站子目錄字串，例如'mtask'，預設''
@@ -222,6 +228,15 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     }
 
 
+    //kp: 資料通道函數(kpFunExt)的呼叫者轉接: 由 userId 查回 getUserIdByToken 驗證當下登錄之角色(access.callerOf; 無登錄或逾期即拒絕), 再交給 gf 之函數(規則檢查在 gf 內), 並經 wrapErrLog
+    let kp = (name, fn) => {
+        return wrapErrLog(name, async (userId, ...args) => {
+            let caller = await access.callerOf(userId)
+            return await fn(caller, ...args)
+        })
+    }
+
+
     //kmx: per-key in-memory mutex, 同 key 序列化、不同 key 並行. 任務生命週期 critical 路徑用.
     let kmx = pmKeyMutex()
 
@@ -234,7 +249,10 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
     //procCore
     let pc = procCore({ woItems, procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite })
-    let { saveFile, getFileInfo, readFile, getStats } = pc
+
+
+    //access: 呼叫者角色與成員檢查之單一擁有者 (server/access.mjs; 規格見 spec/設計要點與取捨.md D20). procCore 不做授權, 授權只在下方 gf (入口函數表) 套用一次.
+    let access = createAccess({ woItems, srLog })
 
 
     //封存掃描 (spec D12 方向②: 冷熱分離): 啟動後 30s 首掃 + 每小時掃一次, 將過齡終態任務/舊訊息搬至冷表.
@@ -282,29 +300,46 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     }
 
 
+    //gf: 全部對外入口函數 (資料通道 kpFunExt、對外 HTTP REST 共用) 與其呼叫者規則之單一表, 每個函數收 (caller, ...args):
+    //管理類限系統管理員; 頻道內容 (訊息、任務、游標、成員名冊) 限系統管理員或該頻道成員; 檔案限系統管理員或任一頻道成員; 清單與統計只回有權看之頻道之資料 (見 access.mjs)
+    let gf = createGuardedFuncs({ access, pc, getWebInfor })
+
+
+    //pickUser: 使用者物件之對外 / 對 console 投影 (白名單 id / name / email / isAdmin, 前端 userSelf 只讀此四欄): 部署方 getUserByToken 回傳之物件可能夾帶其他欄位 (如密鑰、內部識別碼),
+    //登入檢查之回應與認證失敗之 console 皆只出此投影 (同 w-web-api A-2; 外審 sol#3 / opus#9)
+    let pickUser = (user) => {
+        return {
+            id: get(user, 'id', ''),
+            name: get(user, 'name', ''),
+            email: get(user, 'email', ''),
+            isAdmin: get(user, 'isAdmin', ''),
+        }
+    }
+
+
     //checkUser
     let checkUser = async(user) => {
         let id = get(user, 'id', '')
         if (!isestr(id)) {
-            console.log('user', user)
+            console.log('user', pickUser(user))
             console.log('can not get the userId')
             return Promise.reject('errUserIdMissing')
         }
         let email = get(user, 'email', '')
         if (!isestr(email)) {
-            console.log('user', user)
+            console.log('user', pickUser(user))
             console.log('can not get the email of user')
             return Promise.reject('errUserEmailMissing')
         }
         let name = get(user, 'name', '')
         if (!isestr(name)) {
-            console.log('user', user)
+            console.log('user', pickUser(user))
             console.log('can not get userName')
             return Promise.reject('errUserNameMissing')
         }
         let isAdmin = get(user, 'isAdmin', '')
         if (isAdmin !== 'y' && isAdmin !== 'n') {
-            console.log('user', user)
+            console.log('user', pickUser(user))
             console.log('user.isAdmin is not y or n', user.isAdmin)
             console.log('can not get the role of user')
             return Promise.reject('errUserRoleMissing')
@@ -334,30 +369,41 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         }
 
         //checkUser: client 與 app 路徑對稱 (id/email/name/isAdmin 缺一即拒).
-        //agent 建議以 SSO app token (isApp='y') 認證, 其解析之虛擬使用者四欄皆為非空占位值, 不受本檢查影響.
+        //agent 建議以 SSO app token (isApp='y') 認證 (使用者用途反查回所綁使用者之實際資料; 系統服務用途反查回 id='app:<金鑰主鍵>' 與非空占位之 name / email, isAdmin='y'), 四欄皆為非空值, 不受本檢查影響.
         await checkUser(user)
 
         return user
     }
 
 
+    //authToken：瀏覽使用者 token 完整驗證之單一擁有者（連線閘 p.checkToken、執行身分 getUserIdByToken、登入檢查 getAndVerifyClientUser 三者共用；C3，
+    //dspec 使用者身分驗證原則.md 二.1、二.2：執行身分即驗證身分之步驟，須與連線閘同等完整，不可只查 token 對應之 id）。
+    //認證：getTokenUser（解析呼叫者、欄位齊備；本套件無自有使用者表，「使用者存在且啟用」由部署方 getUserByToken 查無即回 null 保證，查無一律 errUserNotFound）；
+    //授權：已包裝之 verifyClientUser（拋錯或 reject 視同 false 並記 inject warn），from 為入口名（連線閘為 w-converhp 之 apiType，執行身分固定為 'main'，登入檢查為 'getUserByToken'）。
+    //回 { user, allowed }：認證失敗 reject 自家 key；授權不通過回 allowed:false，由呼叫端依其入口記 log 與回應。
+    //交給鉤子者為淺拷貝：鉤子改寫傳入之物件（如把 isAdmin 改為 'y'）不影響其後之角色判斷（角色取自 access.remember／callerOfUser 所見之原物件）。
+    let authToken = async (token, from = '') => {
+
+        //getTokenUser
+        let user = await getTokenUser(token)
+
+        //verifyClientUser
+        let b = verifyClientUser({ ...user }, from)
+        if (ispm(b)) {
+            b = await b
+        }
+
+        return { user, allowed: !!b }
+    }
+
+
     //p
     let p = {
         //checkToken：資料通道之連線閘（verifyConn 用），回傳是否放行（spec D17 決策 3）。
-        //認證：getTokenUser，與 HTTP 路徑同一出口（S8）；失敗 reject 自家 key（w-converhp 回 permission denied、不寫 srLog，D15）。
-        //授權：已包裝之 verifyClientUser（拋錯或 reject 視同 false 並記 inject warn），與登入檢查 getAndVerifyClientUser 同一判定；from 為 w-converhp 之 apiType。
+        //認證與授權皆經 authToken；認證失敗 reject 自家 key（w-converhp 回 permission denied、不寫 srLog，D15）。
         checkToken: async(token, from = '') => {
-
-            //getTokenUser
-            let user = await getTokenUser(token)
-
-            //verifyClientUser
-            let b = verifyClientUser(user, from)
-            if (ispm(b)) {
-                b = await b
-            }
-
-            return !!b
+            let { allowed } = await authToken(token, from)
+            return allowed
         },
     }
 
@@ -365,18 +411,12 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     //getAndVerifyClientUser
     let getAndVerifyClientUser = async (token, from = '') => {
 
-        //getTokenUser
-        let user = await getTokenUser(token)
-
-        //verifyClientUser
-        let b = verifyClientUser(user, from)
-        if (ispm(b)) {
-            b = await b
-        }
+        //authToken
+        let { user, allowed } = await authToken(token, from)
 
         //check
-        if (!b) {
-            console.log('user', user)
+        if (!allowed) {
+            console.log('user', pickUser(user))
             console.log(`user does not have permission`)
             return Promise.reject('errUserNoPermission')
         }
@@ -392,15 +432,15 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         //getTokenUser：查無 → errUserNotFound、欄位不齊 → checkUser 之 key（與 client 路徑同一出口）
         let user = await getTokenUser(token)
 
-        //verifyAppUser
-        let b = verifyAppUser(user, from)
+        //verifyAppUser: 交給鉤子者為淺拷貝 (同 authToken): 鉤子改寫傳入之物件 (如把 isAdmin 改為 'y') 不影響其後以原物件 user 判斷之角色與身分 (外審 opus#6, 部署方只能再收緊)
+        let b = verifyAppUser({ ...user }, from)
         if (ispm(b)) {
             b = await b
         }
 
         //check
         if (!b) {
-            console.log('user', user)
+            console.log('user', pickUser(user))
             console.log(`user does not have permission`)
             return Promise.reject('errUserNoPermission')
         }
@@ -498,7 +538,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     }
 
                     srLog.info({ event: 'api/getUserByToken', userId: get(user, 'id', '') })
-                    return user
+                    return pickUser(user) //只回 id / name / email / isAdmin (前端 userSelf 只讀此四欄), 不原樣回傳部署方之物件
                 }
 
                 return await runApi('getUserByToken', core)
@@ -523,7 +563,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let agentId = get(req, 'query.agentId', '')
 
                     //getChannelsList
-                    let r = await pc.getChannelsList(userId, agentId)
+                    let r = await gf.getChannelsList(access.callerOfUser(user), agentId)
 
                     srLog.info({ event: 'api/getChannels', userId })
                     return r
@@ -553,7 +593,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let afterId = get(req, 'query.afterId', '')
 
                     //getMessages
-                    let r = await pc.getMessages(userId, channelId, n, afterId)
+                    let r = await gf.getMessages(access.callerOfUser(user), channelId, n, afterId)
 
                     srLog.info({ event: 'api/getRecentMessages', userId })
                     return r
@@ -584,7 +624,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let order = get(req, 'query.order', 'desc')
 
                     //getTasks
-                    let r = await pc.getTasks(userId, channelId, n, state, order)
+                    let r = await gf.getTasks(access.callerOfUser(user), channelId, n, state, order)
 
                     srLog.info({ event: 'api/getRecentTasks', userId })
                     return r
@@ -614,7 +654,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let order = get(req, 'query.order', 'desc')
 
                     //getArchivedTasks
-                    let r = await pc.getArchivedTasks(userId, channelId, n, order)
+                    let r = await gf.getArchivedTasks(access.callerOfUser(user), channelId, n, order)
 
                     srLog.info({ event: 'api/getArchivedTasks', userId })
                     return r
@@ -643,7 +683,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let n = cint(get(req, 'query.n', 20))
 
                     //getArchivedMessages
-                    let r = await pc.getArchivedMessages(userId, channelId, n)
+                    let r = await gf.getArchivedMessages(access.callerOfUser(user), channelId, n)
 
                     srLog.info({ event: 'api/getArchivedMessages', userId })
                     return r
@@ -671,7 +711,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let taskId = get(req, 'query.taskId', '')
 
                     //getTask
-                    let r = await pc.getTask(userId, taskId)
+                    let r = await gf.getTask(access.callerOfUser(user), taskId)
 
                     srLog.info({ event: 'api/getTask', userId })
                     return r
@@ -706,7 +746,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     }
 
                     //postMessage
-                    let r = await pc.postMessage(userId, channelId, content, opt)
+                    let r = await gf.postMessage(access.callerOfUser(user), channelId, content, opt)
 
                     srLog.info({ event: 'api/postMessage', userId })
                     return r
@@ -734,7 +774,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let taskId = get(payload, 'taskId', '')
 
                     //claimTask
-                    let r = await pc.claimTask(userId, taskId)
+                    let r = await gf.claimTask(access.callerOfUser(user), taskId)
 
                     srLog.info({ event: 'api/claimTask', userId })
                     return r
@@ -765,7 +805,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let errorKey = get(payload, 'errorKey', '')
 
                     //respondTask (不傳 senderType → 預設 'agent')
-                    let r = await pc.respondTask(userId, taskId, result, state, errorKey)
+                    let r = await gf.respondTask(access.callerOfUser(user), taskId, result, state, errorKey)
 
                     srLog.info({ event: 'api/respondTask', userId })
                     return r
@@ -793,7 +833,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let taskId = get(payload, 'taskId', '')
 
                     //resetTask
-                    let r = await pc.resetTask(userId, taskId)
+                    let r = await gf.resetTask(access.callerOfUser(user), taskId)
 
                     srLog.info({ event: 'api/resetTask', userId })
                     return r
@@ -822,7 +862,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let lastMessageId = get(payload, 'lastMessageId', '')
 
                     //ackChannel
-                    let r = await pc.ackChannel(userId, channelId, lastMessageId)
+                    let r = await gf.ackChannel(access.callerOfUser(user), channelId, lastMessageId)
 
                     srLog.info({ event: 'api/ackChannel', userId })
                     return r
@@ -858,8 +898,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let type = get(payload, 'type', '')
                     let dataBase64 = get(payload, 'dataBase64', '')
 
-                    //saveFile
-                    let r = await pc.saveFile(userId, { name, type, dataBase64 })
+                    //uploadFile
+                    let r = await gf.uploadFile(access.callerOfUser(user), { name, type, dataBase64 })
 
                     srLog.info({ event: 'api/uploadFile', userId })
                     return r
@@ -887,7 +927,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let id = get(req, 'query.id', '')
 
                     //getFileInfo
-                    let r = await pc.getFileInfo(userId, id)
+                    let r = await gf.getFileInfo(access.callerOfUser(user), id)
 
                     srLog.info({ event: 'api/getFileInfo', userId })
                     return r
@@ -912,7 +952,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     let userId = get(user, 'id', '')
 
                     //getStats
-                    let r = await pc.getStats(userId)
+                    let r = await gf.getStats(access.callerOfUser(user))
 
                     srLog.info({ event: 'api/getStats', userId })
                     return r
@@ -931,7 +971,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                 let id = get(req, 'query.id', '')
                 try {
                     let user = await getAndVerifyAppUser(token, 'getFile')
-                    let r = await readFile(id)
+                    let r = await gf.getFile(access.callerOfUser(user), id)
                     srLog.info({ event: 'api/getFile', userId: get(user, 'id', '') })
                     //安全: 僅白名單點陣圖類型可用原 Content-Type 以 inline 呈現 (聊天 <img> 需求);
                     //其餘 (含 text/html, image/svg+xml 等可挾帶 script 之類型) 一律強制 application/octet-stream + attachment 下載,
@@ -976,10 +1016,19 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         apiName: 'api',
         apis,
         tokenType: 'Bearer',
+        //身分驗證責任(跨套件原則, 見自有套件庫主控之 dspec「使用者身分驗證原則」): 框架(w-converhp、w-serv-hapi、w-serv-webdata、w-serv-orm)不驗證token, 一律由本套件負責.
+        //連線閘(verifyConn)與執行身分(getUserIdByToken)皆須完整驗證(token有效、本系統使用者存在且啟用、部署方授權verifyClientUser); hapi apis路由各自驗證; 函數層級另檢查角色或成員; 公開入口只限列名者.
+        //本套件之落實(task-run01, spec D20): 連線閘/執行身分/登入檢查共用 authToken; 管理類限系統管理員(isAdmin==='y'), 頻道內容限系統管理員或頻道成員(server/access.mjs); 系統函數只公開 [sys:getFuncList](下方 sysFuncsPublic).
+        //公開入口(無須 token): 只有前端靜態檔(index.html 與建置檔); /api/* 與資料通道一律須 token.
         verifyConn: async ({ apiType, authorization, query, headers, req }) => {
 
             //token
-            let token = strdelleft(authorization, 7) //刪除Bearer
+            //Authorization 標頭須為 Bearer 方案(RFC 9110 §11.1: 方案名不分大小寫, 方案名與憑證間為一個以上空白), 不符者視為未帶 token (同 w-web-perm P-3、w-web-api; 修前無條件刪前 7 字元而不驗方案; 外審 opus#8)
+            let token = ''
+            if (isestr(authorization)) {
+                let m = authorization.match(/^Bearer +(\S.*)$/i)
+                token = m ? m[1] : ''
+            }
 
             //check
             if (!isestr(token)) {
@@ -1003,61 +1052,81 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
             return true
         },
         getUserIdByToken: async (token) => { //可使用async或sync函數
-            //fail-closed（S9，對齊 perm）：token 非字串或查無 userId（含上游失敗經 wrapInjected 視同查無）一律 reject，
-            //不以 '' 放行 execute 執行函數（修正前回 '' 並繼續執行 = fail-open）
-            let user = null
-            if (isestr(token)) {
-                user = await getUserByToken(token)
+            //執行身分（C3，spec D20）：w-serv-webdata 於執行每個資料通道函數（kpFunExt、表 select、系統函數）之前以請求本體之 __sysToken__ 呼叫本函數取得 userId，
+            //此 token 與連線閘所驗之 Authorization 標頭 token 來自不同欄位、可為不同值（框架不比對兩者）。故「反查使用者」即驗證身分之步驟，須與連線閘同等完整：
+            //token 認證（解析、欄位齊備）＋部署方授權 verifyClientUser(user, 'main')，共用 authToken（from 固定為 'main'：資料通道函數只由 /api/main 之 execute 觸發，與連線閘 'main' 為同一入口）。
+            //fail-closed（S9）：token 非字串、查無、欄位不齊、授權不通過（含上游失敗經 wrapInjected 視同查無／否定）一律 reject 'errUserIdMissing'，函數不執行；
+            //原因只入 srLog（err 為自家 key，不含 token 與使用者資料）。通過者登錄其角色供其後同一呼叫之函數層級檢查（access.remember／callerOf；見 access.mjs）。
+            let seq = access.nextSeq() //驗證開始時取序號: 同一 userId 並行驗證之完成順序可能顛倒, 登錄只接受不舊之序號 (access.remember)
+            let r = null
+            try {
+                r = await authToken(token, 'main')
             }
-            let userId = get(user, 'id', '')
-            if (!isestr(userId)) {
+            catch (err) {
                 console.log('token', maskTok(token))
                 console.log('can not get the userId from token')
                 srLog.error({ event: 'getUserIdByToken', err: 'errUserIdMissing' })
                 return Promise.reject('errUserIdMissing')
             }
-            return userId
+            if (!r.allowed) {
+                console.log('token', maskTok(token))
+                console.log('user does not have permission for execution')
+                srLog.error({ event: 'getUserIdByToken', err: 'errUserNoPermission' })
+                return Promise.reject('errUserIdMissing')
+            }
+            access.remember(r.user, seq)
+            return get(r.user, 'id', '') //getTokenUser／checkUser 已驗 id 為非空字串
         },
+        //系統函數收緊（第 128 項；dspec 使用者身分驗證原則.md 二.7、二.8）：只公開 [sys:getFuncList]（函數名稱清單，無敏感內容）；
+        //[sys:polling]（取走廣播與同步表時間戳）與 [sys:getTableTags]（同步表名與時間戳）須有效身分——輪詢之 __sysToken__ 由前端元件（w-serv-hapi 1.1.8／w-serv-webdata 1.1.16／w-serv-broadcast 1.1.12 起）每輪帶上，經 getUserIdByToken 反查。
+        //本套件前端與後端同一套件發布，前端建置檔已用新元件，故可顯式開啟（原則二.8）；已發布之舊前端建置檔輪詢不帶 token，會被拒（需重新載入）。
+        sysFuncsPublic: ['[sys:getFuncList]'],
         useDbOrm: true,
         kpOrm: woItems,
-        operOrm: procOrm, //procOrm的輸入為: userId, tableName, methodName, input
+        //operOrm：表 select 供前端同步 channels / channelMembers（authorizeExec 只能整次放行或拒絕）；一般使用者只得所屬頻道之列（C2b，access.scopeSelect），管理員全部。
+        //先確認呼叫者登錄（getUserIdByToken 驗證當下寫入，逾期或無則拒絕）再讀取，不讀了才拒絕。
+        operOrm: async (userId, tableName, methodName, input) => { //procOrm的輸入為: userId, tableName, methodName, input
+            let caller = await access.callerOf(userId)
+            let r = await procOrm(userId, tableName, methodName, input)
+            return await access.scopeSelect(caller, tableName, methodName, r)
+        },
         tableNamesExec,
         methodsExec,
         authorizeExec: createAuthorizeExec({ methodsExec, srLog }), //w-serv-webdata 1.1.7 起 useDbOrm=true 時必填; 只放行已識別使用者之 select, 拒絕記 srLog (spec D17)
         tableNamesSync,
-        kpFunExt: { //接收參數第1個為userId, 之後才是前端給予參數 (皆經 wrapErrLog)
+        kpFunExt: { //接收參數第1個為userId(getUserIdByToken 驗證後之執行身分), 之後才是前端給予參數 (皆經 wrapErrLog); 一律經 gf(角色與成員檢查, access.mjs), 經 kp 取得呼叫者角色(getUserIdByToken 登錄)
 
-            getWebInfor: wrapErrLog('getWebInfor', getWebInfor),
+            getWebInfor: kp('getWebInfor', (c) => gf.getWebInfor(c)),
 
-            getChannelsList: wrapErrLog('getChannelsList', (userId) => pc.getChannelsList(userId)),
-            //清單級 API (後台整表編輯頁一次提交整份清單; opt 只取 baseline 一鍵: 載入時之基準, 不符即整次拒收零寫入)
-            saveChannels: wrapErrLog('saveChannels', (userId, rows, opt) => pc.saveChannels(userId, rows, opt)),
-            deleteChannels: wrapErrLog('deleteChannels', (userId, ids, opt) => pc.deleteChannels(userId, ids, opt)),
-            //單筆 API (保留供外部呼叫, 屬不帶基準之寫入; 前端不再呼叫)
-            saveChannel: wrapErrLog('saveChannel', (userId, row) => pc.saveChannel(userId, row)),
-            deleteChannel: wrapErrLog('deleteChannel', (userId, id) => pc.deleteChannel(userId, id)),
+            getChannelsList: kp('getChannelsList', (c) => gf.getChannelsList(c)), //只回呼叫者有權看之頻道; 管理員全部
+            //清單級 API (後台整表編輯頁一次提交整份清單; opt 只取 baseline 一鍵: 載入時之基準, 不符即整次拒收零寫入); 管理類限系統管理員
+            saveChannels: kp('saveChannels', (c, rows, opt) => gf.saveChannels(c, rows, opt)),
+            deleteChannels: kp('deleteChannels', (c, ids, opt) => gf.deleteChannels(c, ids, opt)),
+            //單筆 API (保留供外部呼叫, 屬不帶基準之寫入; 前端不再呼叫); 管理類限系統管理員
+            saveChannel: kp('saveChannel', (c, row) => gf.saveChannel(c, row)),
+            deleteChannel: kp('deleteChannel', (c, id) => gf.deleteChannel(c, id)),
 
-            getChannelMembers: wrapErrLog('getChannelMembers', (userId, channelId) => pc.getChannelMembers(userId, channelId)),
-            saveChannelMembers: wrapErrLog('saveChannelMembers', (userId, channelId, rows, opt) => pc.saveChannelMembers(userId, channelId, rows, opt)),
-            deleteChannelMembers: wrapErrLog('deleteChannelMembers', (userId, channelId, ids, opt) => pc.deleteChannelMembers(userId, channelId, ids, opt)),
-            saveChannelMember: wrapErrLog('saveChannelMember', (userId, row) => pc.saveChannelMember(userId, row)),
-            deleteChannelMember: wrapErrLog('deleteChannelMember', (userId, id) => pc.deleteChannelMember(userId, id)),
+            getChannelMembers: kp('getChannelMembers', (c, channelId) => gf.getChannelMembers(c, channelId)), //管理員或該頻道成員
+            saveChannelMembers: kp('saveChannelMembers', (c, channelId, rows, opt) => gf.saveChannelMembers(c, channelId, rows, opt)), //管理類限系統管理員
+            deleteChannelMembers: kp('deleteChannelMembers', (c, channelId, ids, opt) => gf.deleteChannelMembers(c, channelId, ids, opt)),
+            saveChannelMember: kp('saveChannelMember', (c, row) => gf.saveChannelMember(c, row)),
+            deleteChannelMember: kp('deleteChannelMember', (c, id) => gf.deleteChannelMember(c, id)),
 
-            getMessages: wrapErrLog('getMessages', (userId, channelId, n, afterId) => pc.getMessages(userId, channelId, n, afterId)),
-            postMessage: wrapErrLog('postMessage', (userId, channelId, content, opt) => pc.postMessage(userId, channelId, content, opt)),
+            getMessages: kp('getMessages', (c, channelId, n, afterId) => gf.getMessages(c, channelId, n, afterId)),
+            postMessage: kp('postMessage', (c, channelId, content, opt) => gf.postMessage(c, channelId, content, opt)),
 
-            getTasks: wrapErrLog('getTasks', (userId, channelId, n, state, order) => pc.getTasks(userId, channelId, n, state, order)),
-            getArchivedTasks: wrapErrLog('getArchivedTasks', (userId, channelId, n, order) => pc.getArchivedTasks(userId, channelId, n, order)),
-            getArchivedMessages: wrapErrLog('getArchivedMessages', (userId, channelId, n) => pc.getArchivedMessages(userId, channelId, n)),
-            getTask: wrapErrLog('getTask', (userId, taskId) => pc.getTask(userId, taskId)),
-            claimTask: wrapErrLog('claimTask', (userId, taskId) => pc.claimTask(userId, taskId)),
-            respondTask: wrapErrLog('respondTask', (userId, taskId, result, state, errorKey, senderType) => pc.respondTask(userId, taskId, result, state, errorKey, senderType)),
-            resetTask: wrapErrLog('resetTask', (userId, taskId) => pc.resetTask(userId, taskId)),
-            ackChannel: wrapErrLog('ackChannel', (userId, channelId, lastMessageId) => pc.ackChannel(userId, channelId, lastMessageId)),
+            getTasks: kp('getTasks', (c, channelId, n, state, order) => gf.getTasks(c, channelId, n, state, order)),
+            getArchivedTasks: kp('getArchivedTasks', (c, channelId, n, order) => gf.getArchivedTasks(c, channelId, n, order)),
+            getArchivedMessages: kp('getArchivedMessages', (c, channelId, n) => gf.getArchivedMessages(c, channelId, n)),
+            getTask: kp('getTask', (c, taskId) => gf.getTask(c, taskId)),
+            claimTask: kp('claimTask', (c, taskId) => gf.claimTask(c, taskId)),
+            respondTask: kp('respondTask', (c, taskId, result, state, errorKey, senderType) => gf.respondTask(c, taskId, result, state, errorKey, senderType)),
+            resetTask: kp('resetTask', (c, taskId) => gf.resetTask(c, taskId)),
+            ackChannel: kp('ackChannel', (c, channelId, lastMessageId) => gf.ackChannel(c, channelId, lastMessageId)),
 
-            uploadFile: wrapErrLog('uploadFile', (userId, inp) => pc.saveFile(userId, inp)),
-            getFileInfo: wrapErrLog('getFileInfo', (userId, id) => pc.getFileInfo(userId, id)),
-            getStats: wrapErrLog('getStats', (userId) => pc.getStats(userId)),
+            uploadFile: kp('uploadFile', (c, inp) => gf.uploadFile(c, inp)), //管理員或任一頻道成員
+            getFileInfo: kp('getFileInfo', (c, id) => gf.getFileInfo(c, id)),
+            getStats: kp('getStats', (c) => gf.getStats(c)), //只計呼叫者有權看之頻道
 
         },
         fpTableTags: 'tableTags-web-task.json', //w-serv-hapi 之新鍵名(舊名 fnTableTags 僅靠相容層生效)

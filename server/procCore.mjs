@@ -1293,7 +1293,9 @@ function procCore(deps = {}) {
     //ackChannel: 推進呼叫者 (agent) 在該頻道之已讀游標. 缺列者 upsert. 兩段式鎖 (修 O3):
     //第一段更新路徑 (熱路徑, agent 輪詢頻繁): 只取實體鎖 channelMember:<c>:<u>, 以 autoInsert:false 只改不增 (列已被後台刪除 → 未命中, 不復活殘缺列), 只寫 lastSeenMessageId 與稽核欄 (與清單存檔寫入之欄位不重疊, lmdb 單列合併寫入原子);
     //第二段缺列路徑: 先釋放實體鎖再取表鎖 (避免實體鎖 → 表鎖倒置), 鎖內檢查頻道仍存在、重查 (他人剛建者改更新游標, 不新增重複列), 仍缺才 insert.
-    let ackChannel = async (userId, channelId, lastMessageId) => {
+    //allowInsert: 缺列時是否可建列 (預設 true = 修前行為, 供 unit 與管理員); 入口邊界 (access.mjs) 對一般使用者傳 false:
+    //一般使用者之成員資格已於授權檢查通過 (列存在), 若其後該列被管理員移除, 第一段查無列, 此時**不得**重新建列 (否則被移除者藉競態自我加回, 外審 opus#1), 回 errChannelNotMember.
+    let ackChannel = async (userId, channelId, lastMessageId, allowInsert = true) => {
 
         //check
         if (!isestr(channelId)) {
@@ -1325,6 +1327,9 @@ function procCore(deps = {}) {
         })
         if (hit) {
             return { ok: true }
+        }
+        if (!allowInsert) {
+            return Promise.reject('errChannelNotMember')
         }
 
         //第二段: 缺列路徑
@@ -1443,11 +1448,17 @@ function procCore(deps = {}) {
 
 
     //getStats: 系統統計. 回 { channels, messages, tasks:{pending,running,done,error,total} }. tasks 單次掃描後記憶體分態計數.
-    let getStats = async (userId) => {
+    //scope: 頻道 id 集合 (Set); 給定時只計這些頻道 (一般使用者只計所屬頻道, 由入口邊界 access.mjs 決定), 未給 (null) 為全系統.
+    let getStats = async (userId, scope = null) => {
 
         let channels = await woItems.channels.select({ isActive: 'y' })
         let messages = await woItems.messages.select({ isActive: 'y' })
         let tasksAll = await woItems.tasks.select({ isActive: 'y' })
+        if (scope !== null) {
+            channels = filter(channels, (r) => scope.has(r.id))
+            messages = filter(messages, (r) => scope.has(r.channelId))
+            tasksAll = filter(tasksAll, (r) => scope.has(r.channelId))
+        }
 
         let kn = { pending: 0, running: 0, done: 0, error: 0 }
         for (let t of tasksAll) {
