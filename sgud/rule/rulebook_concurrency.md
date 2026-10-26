@@ -89,7 +89,7 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 | V11 | 有草稿時收到推播 | `unit-draft`「decidePush」; E2E-014(頻道頁)、E2E-015(成員頁) | 已證 |
 | V12 | 清單頁多列提交其中一列過期 | 「V12 (E4 轉綠)」; `api-concurrency`「V1 / V12」 | 已證 |
 | V13 | 格式或版本不識之基準 | 「V13」(8 種不識 × 4 API × 頻道 / 成員); `api-concurrency`「V13」 | 已證 |
-| V14 | 比對與寫入間不可插入他人寫入(人為延遲) | 「V14」三案(兩管理員並行、單筆 / 清單 / 刪除並行、ack 缺列路徑取表鎖)、「V14 (主控加之條件)」、E2 三案(封存 vs 重置) | 已證 |
+| V14 | 比對與寫入間不可插入他人寫入(人為延遲) | 「V14」三案(兩系統管理者並行、單筆 / 清單 / 刪除並行、ack 缺列路徑取表鎖)、「V14 (主控加之條件)」、E2 三案(封存 vs 重置) | 已證 |
 
 ### 9.4 缺陷轉綠對照(inv01 探測 → 正式測試)
 
@@ -126,7 +126,7 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 
 **已知不修(附理由)**:
 
-- sol #6 以毫秒時間判「本輪認領後建立之殘留 taskReply」(`timeCreate >= timeClaim`): 須同一毫秒內完成「第一輪回覆 → 管理員重置 → 第二輪認領」才會誤沿用前輪回覆, 人為流程不可能達到; 若改用持久輪次識別需動 tasks schema(新增欄位與遷移), 擴大改動面; 時鐘回撥同。測試以 `sleep(5)` 避開此邊界(已註明)。
+- sol #6 以毫秒時間判「本輪認領後建立之殘留 taskReply」(`timeCreate >= timeClaim`): 須同一毫秒內完成「第一輪回覆 → 系統管理者重置 → 第二輪認領」才會誤沿用前輪回覆, 人為流程不可能達到; 若改用持久輪次識別需動 tasks schema(新增欄位與遷移), 擴大改動面; 時鐘回撥同。測試以 `sleep(5)` 避開此邊界(已註明)。
 - `opModify` 補償對「列上原本缺欄」之欄位寫回空字串(beam #7): 摘要對缺欄 ≡ 空值, 且所有列皆由 `funNew` 產生含全欄; 不另處理。
 - beam #2(成員頁存檔成功後不依己寫期間之推播重算提示): 成員頁每次 `rowsChange` 即以 `store.channelMembers` 比對凍結基準(`onStorePush`), 他人於存檔後之變更於使用者下一次編輯時即提示, 無遺失; 不屬實於功能面。
 - beam #5(`archiveSweep` 與 `postMessage` / `respondTask` 無共用表鎖): 封存只搬「過齡」(預設天數以上)之訊息與終態任務, 與新發訊 / 回覆之資料集不相交; 任務以 `task:<id>` 鎖與 `respondTask` 序列化。不屬實。
@@ -149,7 +149,7 @@ W01/W02/W03(`saveChannel` 修改 / 新增 / 補 agent 成員列)→ `saveChannel
 | 前端清單頁(`LayoutContentChannels.vue` / `LayoutContentMembers.vue`) | `unit-draft`、e2e E2E-005 / 008 / 010 / 014 / 015 / 016 / 017(兩語系; 008 為聊天頁成員視窗共用 `LayoutContentMembers`) |
 | `server/procLang.mjs` 之 `deleteChannelConfirm` 等語系鍵 | 無標準圖含刪頻道確認框(`grep -n "deleteChannelConfirm" test/`: 0); 跑 `unit-procCore`、`unit-optRemoved` |
 | `server/access.mjs`(角色 / 成員檢查、入口函數表)、`server/WWebTask.mjs` 之 `authToken` / `getUserIdByToken` / `kp` / `operOrm` / `sysFuncsPublic`、`srv.mjs` 之測試權杖(task-run01, D20) | `unit-access`、`api-callerMatrix`(462 格)、`api-dataChannel`、`api-tokenLeak`、`unit-authorizeExec`、`unit-optRemoved`、`unit-procCore`、`api-agent`、`api-files`、`api-doubleclick`、`api-concurrency`; 改到連線與同步(`sysFuncsPublic`、w-serv-hapi 升版)→ e2e 全跑 |
-| `src/plugins/mAccess.mjs`、`Rail.vue` 之 `navItems`、`LayoutContentMembers.vue` 之編輯開關(D20 前端) | `unit-mAccess`; e2e 恆以管理員登入故畫面不變, 跑 E2E-001～017 全部(Rail 為每案共用) |
+| `src/plugins/mAccess.mjs`、`Rail.vue` 之 `navItems`、`LayoutContentMembers.vue` 之編輯開關(D20 前端) | `unit-mAccess`; e2e 恆以系統管理者登入故畫面不變, 跑 E2E-001～017 全部(Rail 為每案共用) |
 | 共用基礎(測試輔助、版面共用元件、樣式、建置設定、w-serv-orm 與 w-serv-hapi 升版) | 擴大至 e2e 全跑 + 全套 unit / api |
 
 ### 9.8 第三輪(2026-10-23, 任務 task-run02, 修正輪): 刪頻道移入封存表(Q2)與編輯器開啟中視同草稿(N1)

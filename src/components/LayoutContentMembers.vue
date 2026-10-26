@@ -69,7 +69,7 @@
                 style="padding:5px; border-top:1px solid var(--border); display:flex; align-items:center;"
             >
 
-                <!-- 編輯開關: 明確為非管理員者隱藏 (便利性; 成員管理類函數由後端限系統管理員, 見 src/plugins/mAccess.mjs) -->
+                <!-- 編輯開關: 明確為非系統管理者時隱藏 (便利性; 成員管理類函數由後端限系統管理者, 見 src/plugins/mAccess.mjs) -->
                 <div v-if="isManager" data-fmid="members-edit-switch" style="padding:6px 0px 4px 4px;">
                     <WSwitch
                         :checkedSwitchCircleColor="'#F68200'"
@@ -354,7 +354,7 @@ export default {
     },
     watch: {
 
-        //明確為非管理員時收回編輯模式 (使用者資料晚於畫面取得時, 已開啟之編輯模式不殘留; 便利性, 後端為權威)
+        //明確為非系統管理者時收回編輯模式 (使用者資料晚於畫面取得時, 已開啟之編輯模式不殘留; 便利性, 後端為權威)
         isManager: function(v) {
             if (!v) {
                 this.isEditable = false

@@ -10,16 +10,16 @@ import isfun from 'wsemi/src/isfun.mjs'
 //procCore 只信任第一參數 userId 為操作者身分 (來自 token), 不做授權; 授權全在本模組, 且只在 WWebTask 的入口邊界套用一次:
 //資料通道 (kpFunExt、表 select) 與對外 HTTP REST (apis) 共用 createGuardedFuncs 產生之同一組函數, 不各寫一份.
 //
-//角色: 系統管理員 ＝ token 經部署方 getUserByToken 所回使用者之 isAdmin 嚴格等於 'y' (自有屬性; 其餘值一律視為一般使用者).
+//角色: 系統管理者 ＝ token 經部署方 getUserByToken 所回使用者之 isAdmin 嚴格等於 'y' (自有屬性; 其餘值一律視為一般使用者).
 //  本套件無自有使用者表 (D3 認證委外 SSO), 故以 token 反查之 isAdmin 為權威 (同 w-web-api; w-web-perm 以自身 users 表為權威).
 //  應用系統 token: 使用者用途 (綁定使用者) 於 sso 反查回所綁使用者之實際資料, 其 isAdmin 即所綁使用者者, 與使用者 token 相同; 系統服務用途 (不綁使用者)
-//  反查回 id 'app:<金鑰主鍵>'、isAdmin 'y', 即系統管理員等級. 本套件不分辨用途 (不讀 isApp), 一律以 isAdmin 判等級.
+//  反查回 id 'app:<金鑰主鍵>'、isAdmin 'y', 即系統管理者等級. 本套件不分辨用途 (不讀 isApp), 一律以 isAdmin 判等級.
 //頻道管理者: 本套件不設. channelMembers.role 為後台可編之自由文字欄 (owner / member), channels.ownerId 亦為後台可編欄, 皆無強制語意, 不得作為授權依據;
-//  管理類 (頻道與成員之建立、修改、刪除) 一律限系統管理員.
+//  管理類 (頻道與成員之建立、修改、刪除) 一律限系統管理者.
 //頻道成員: channelMembers 中 (channelId, memberId = 呼叫者 id, isActive = 'y') 之列; 判準僅此一處 (isMemberOf / memberChannelIds).
 //
-//規則 (分類 → 呼叫者): user 任一已驗證者 | admin 限系統管理員 | channel 限系統管理員或該頻道成員 | task 限系統管理員或該任務所屬頻道成員 | participant 限系統管理員或任一頻道之成員.
-//  user 類之清單與統計只回呼叫者有權看之頻道之資料 (非管理員只見所屬頻道).
+//規則 (分類 → 呼叫者): user 任一已驗證者 | admin 限系統管理者 | channel 限系統管理者或該頻道成員 | task 限系統管理者或該任務所屬頻道成員 | participant 限系統管理者或任一頻道之成員.
+//  user 類之清單與統計只回呼叫者有權看之頻道之資料 (非系統管理者只見所屬頻道).
 
 
 //拒絕鍵 (procLang 有 eng / cht)
@@ -41,7 +41,7 @@ function createAccess({ woItems, srLog, now = Date.now }) {
     }
 
 
-    //isAdminUser: 系統管理員判準之單一擁有者. 只認自有屬性 isAdmin 嚴格等於 'y'
+    //isAdminUser: 系統管理者判準之單一擁有者. 只認自有屬性 isAdmin 嚴格等於 'y'
     let isAdminUser = (user) => {
         return iseobj(user) && Object.prototype.hasOwnProperty.call(user, 'isAdmin') && user.isAdmin === 'y'
     }
@@ -127,14 +127,14 @@ function createAccess({ woItems, srLog, now = Date.now }) {
     }
 
 
-    //requireAdmin: 管理類 → 限系統管理員
+    //requireAdmin: 管理類 → 限系統管理者
     let requireAdmin = async (func, caller) => {
         if (!caller.isAdmin) {
             return deny(func, caller, KEY_NOT_ADMIN)
         }
     }
 
-    //requireChannel: 頻道內容 → 限系統管理員或該頻道成員 (channelId 非字串者, 管理員交由業務函式回 errChannelIdInvalid, 一般使用者一律拒絕)
+    //requireChannel: 頻道內容 → 限系統管理者或該頻道成員 (channelId 非字串者, 系統管理者交由業務函式回 errChannelIdInvalid, 一般使用者一律拒絕)
     let requireChannel = async (func, caller, channelId) => {
         if (caller.isAdmin) {
             return
@@ -144,7 +144,7 @@ function createAccess({ woItems, srLog, now = Date.now }) {
         }
     }
 
-    //requireTask: 任務 → 限系統管理員或該任務所屬頻道之成員; 一般使用者查無任務與非成員同回 errTaskNotFound
+    //requireTask: 任務 → 限系統管理者或該任務所屬頻道之成員; 一般使用者查無任務與非成員同回 errTaskNotFound
     let requireTask = async (func, caller, taskId) => {
         if (caller.isAdmin) {
             return
@@ -159,7 +159,7 @@ function createAccess({ woItems, srLog, now = Date.now }) {
         }
     }
 
-    //requireParticipant: 檔案 → 限系統管理員或任一頻道之有效成員 (檔案不屬單一頻道; 無任何頻道者無使用理由)
+    //requireParticipant: 檔案 → 限系統管理者或任一頻道之有效成員 (檔案不屬單一頻道; 無任何頻道者無使用理由)
     let requireParticipant = async (func, caller) => {
         if (caller.isAdmin) {
             return
@@ -171,7 +171,7 @@ function createAccess({ woItems, srLog, now = Date.now }) {
     }
 
 
-    //scopeIds: 呼叫者有權看之頻道集合; 管理員回 null (不限)
+    //scopeIds: 呼叫者有權看之頻道集合; 系統管理者回 null (不限)
     let scopeIds = async (caller) => {
         if (caller.isAdmin) {
             return null
@@ -274,7 +274,7 @@ function createGuardedFuncs({ access, pc, getWebInfor }) {
     byChannel('getTasks', pc.getTasks)
     byChannel('getArchivedTasks', pc.getArchivedTasks)
     byChannel('getArchivedMessages', pc.getArchivedMessages)
-    //ackChannel: 缺列時只有管理員可建列 (allowInsert); 一般使用者之成員列於授權檢查後若被移除, 不得藉缺列路徑重新加回 (見 procCore.ackChannel); 固定三個參數, 不轉傳呼叫者多給之參數
+    //ackChannel: 缺列時只有系統管理者可建列 (allowInsert); 一般使用者之成員列於授權檢查後若被移除, 不得藉缺列路徑重新加回 (見 procCore.ackChannel); 固定三個參數, 不轉傳呼叫者多給之參數
     f.ackChannel = async (c, channelId, lastMessageId) => {
         await a.requireChannel('ackChannel', c, channelId)
         return await pc.ackChannel(c.id, channelId, lastMessageId, c.isAdmin)

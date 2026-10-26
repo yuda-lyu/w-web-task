@@ -85,17 +85,17 @@ import ds from '../src/schema/index.mjs'
  *
  * 身分驗證責任：框架（w-converhp、w-serv-hapi、w-serv-webdata、w-serv-orm）不驗證token，一律由本套件負責。連線閘（verifyConn）與執行身分（getUserIdByToken）皆須完整驗證（token有效、本系統使用者存在且啟用、部署方授權）；hapi apis路由各自驗證；函數層級另檢查角色或成員；公開入口只限列名者。
  * 本套件之落實：連線閘、執行身分（資料通道本體__sysToken__，from固定為'main'）、登入檢查共用同一個完整驗證（token認證＋verifyClientUser）；本套件無自有使用者表，「使用者存在且啟用」由getUserByToken查無即回null保證。
- * 函數層級（資料通道與HTTP REST共用同一張入口函數表，server/access.mjs）：管理類（頻道與成員之建立、修改、刪除）限系統管理員；訊息、任務、已讀游標、成員名冊限系統管理員或該頻道成員；檔案限系統管理員或任一頻道成員；頻道清單、統計、資料通道之channels／channelMembers的select只回呼叫者有權看之頻道之資料。
- * 系統管理員＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理員）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
+ * 函數層級（資料通道與HTTP REST共用同一張入口函數表，server/access.mjs）：管理類（頻道與成員之建立、修改、刪除）限系統管理者；訊息、任務、已讀游標、成員名冊限系統管理者或該頻道成員；檔案限系統管理者或任一頻道成員；頻道清單、統計、資料通道之channels／channelMembers的select只回呼叫者有權看之頻道之資料。
+ * 系統管理者＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理者）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
  * 公開入口（無須token）只有前端靜態檔；/api/*與資料通道一律須token，系統函數只公開'[sys:getFuncList]'（且本套件之getUserIdByToken對空token fail-closed）。
  *
  * @class
  * @param {Function} WOrm 輸入資料庫ORM函數
  * @param {String} url 輸入資料庫連線字串，例如w-orm-lmdb為'./db'
  * @param {String} db 輸入資料庫名稱字串
- * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'；本套件以'isAdmin'為'y'者為系統管理員（角色之唯一來源，函數層級之管理類限此類使用者），其餘為一般使用者（只能存取自己為成員之頻道）
+ * @param {Function} getUserByToken 輸入處理函數，函數會傳入使用者token，通過此函數處理後並回傳使用者資訊物件，並至少須提供'id'、'email'、'name'、'isAdmin'欄位，且'isAdmin'限輸入'y'或'n'；本套件以'isAdmin'為'y'者為系統管理者（角色之唯一來源，函數層級之管理類限此類使用者），其餘為一般使用者（只能存取自己為成員之頻道）
  * @param {Function} verifyClientUser 輸入驗證瀏覽使用者身份之處理函數，函數會傳入使用者資訊物件之淺拷貝與來源字串(from)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於登入檢查(/api/getUserByToken，from為'getUserByToken')與前端資料通道之每次請求(連線閘，from為w-converhp之apiType如'main'；執行身分每個函數呼叫前再驗一次，from為'main')，三者同一判定；拋錯或reject視同不允許。本套件於此函數通過後另自行要求角色與成員（見上），部署方只能在其上再收緊
- * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from，為API名稱)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於對外HTTP REST API(agent面)；拋錯或reject視同不允許。本套件於此函數通過後另自行要求角色與成員（管理類不在HTTP REST；頻道內容限系統管理員或頻道成員），部署方只能在其上再收緊
+ * @param {Function} verifyAppUser 輸入驗證應用程序使用者身份之處理函數，函數會傳入使用者資訊物件與來源字串(from，為API名稱)，通過此函數識別後回傳布林值，允許使用者回傳true，反之回傳false。作用於對外HTTP REST API(agent面)；拋錯或reject視同不允許。本套件於此函數通過後另自行要求角色與成員（管理類不在HTTP REST；頻道內容限系統管理者或頻道成員），部署方只能在其上再收緊
  * @param {Object} [opt={}] 輸入設定物件，預設{}
  * @param {Integer} [opt.serverPort=11008] 輸入伺服器通訊port，預設11008
  * @param {String} [opt.subfolder=''] 輸入網站子目錄字串，例如'mtask'，預設''
@@ -348,7 +348,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
 
     //gf: 全部對外入口函數 (資料通道 kpFunExt、對外 HTTP REST 共用) 與其呼叫者規則之單一表, 每個函數收 (caller, ...args):
-    //管理類限系統管理員; 頻道內容 (訊息、任務、游標、成員名冊) 限系統管理員或該頻道成員; 檔案限系統管理員或任一頻道成員; 清單與統計只回有權看之頻道之資料 (見 access.mjs)
+    //管理類限系統管理者; 頻道內容 (訊息、任務、游標、成員名冊) 限系統管理者或該頻道成員; 檔案限系統管理者或任一頻道成員; 清單與統計只回有權看之頻道之資料 (見 access.mjs)
     let gf = createGuardedFuncs({ access, pc, getWebInfor })
 
 
@@ -1065,7 +1065,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         tokenType: 'Bearer',
         //身分驗證責任(跨套件原則, 見自有套件庫主控之 dspec「使用者身分驗證原則」): 框架(w-converhp、w-serv-hapi、w-serv-webdata、w-serv-orm)不驗證token, 一律由本套件負責.
         //連線閘(verifyConn)與執行身分(getUserIdByToken)皆須完整驗證(token有效、本系統使用者存在且啟用、部署方授權verifyClientUser); hapi apis路由各自驗證; 函數層級另檢查角色或成員; 公開入口只限列名者.
-        //本套件之落實(task-run01, spec D20): 連線閘/執行身分/登入檢查共用 authToken; 管理類限系統管理員(isAdmin==='y'), 頻道內容限系統管理員或頻道成員(server/access.mjs); 系統函數只公開 [sys:getFuncList](下方 sysFuncsPublic).
+        //本套件之落實(task-run01, spec D20): 連線閘/執行身分/登入檢查共用 authToken; 管理類限系統管理者(isAdmin==='y'), 頻道內容限系統管理者或頻道成員(server/access.mjs); 系統函數只公開 [sys:getFuncList](下方 sysFuncsPublic).
         //公開入口(無須 token): 只有前端靜態檔(index.html 與建置檔); /api/* 與資料通道一律須 token.
         verifyConn: async ({ apiType, authorization, query, headers, req }) => {
 
@@ -1130,7 +1130,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         sysFuncsPublic: ['[sys:getFuncList]'],
         useDbOrm: true,
         kpOrm: woItems,
-        //operOrm：表 select 供前端同步 channels / channelMembers（authorizeExec 只能整次放行或拒絕）；一般使用者只得所屬頻道之列（C2b，access.scopeSelect），管理員全部。
+        //operOrm：表 select 供前端同步 channels / channelMembers（authorizeExec 只能整次放行或拒絕）；一般使用者只得所屬頻道之列（C2b，access.scopeSelect），系統管理者全部。
         //先確認呼叫者登錄（getUserIdByToken 驗證當下寫入，逾期或無則拒絕）再讀取，不讀了才拒絕。
         operOrm: async (userId, tableName, methodName, input) => { //procOrm的輸入為: userId, tableName, methodName, input
             let caller = await access.callerOf(userId)
@@ -1145,16 +1145,16 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
             getWebInfor: kp('getWebInfor', (c) => gf.getWebInfor(c)),
 
-            getChannelsList: kp('getChannelsList', (c) => gf.getChannelsList(c)), //只回呼叫者有權看之頻道; 管理員全部
-            //清單級 API (後台整表編輯頁一次提交整份清單; opt 只取 baseline 一鍵: 載入時之基準, 不符即整次拒收零寫入); 管理類限系統管理員
+            getChannelsList: kp('getChannelsList', (c) => gf.getChannelsList(c)), //只回呼叫者有權看之頻道; 系統管理者全部
+            //清單級 API (後台整表編輯頁一次提交整份清單; opt 只取 baseline 一鍵: 載入時之基準, 不符即整次拒收零寫入); 管理類限系統管理者
             saveChannels: kp('saveChannels', (c, rows, opt) => gf.saveChannels(c, rows, opt)),
             deleteChannels: kp('deleteChannels', (c, ids, opt) => gf.deleteChannels(c, ids, opt)),
-            //單筆 API (保留供外部呼叫, 屬不帶基準之寫入; 前端不再呼叫); 管理類限系統管理員
+            //單筆 API (保留供外部呼叫, 屬不帶基準之寫入; 前端不再呼叫); 管理類限系統管理者
             saveChannel: kp('saveChannel', (c, row) => gf.saveChannel(c, row)),
             deleteChannel: kp('deleteChannel', (c, id) => gf.deleteChannel(c, id)),
 
-            getChannelMembers: kp('getChannelMembers', (c, channelId) => gf.getChannelMembers(c, channelId)), //管理員或該頻道成員
-            saveChannelMembers: kp('saveChannelMembers', (c, channelId, rows, opt) => gf.saveChannelMembers(c, channelId, rows, opt)), //管理類限系統管理員
+            getChannelMembers: kp('getChannelMembers', (c, channelId) => gf.getChannelMembers(c, channelId)), //系統管理者或該頻道成員
+            saveChannelMembers: kp('saveChannelMembers', (c, channelId, rows, opt) => gf.saveChannelMembers(c, channelId, rows, opt)), //管理類限系統管理者
             deleteChannelMembers: kp('deleteChannelMembers', (c, channelId, ids, opt) => gf.deleteChannelMembers(c, channelId, ids, opt)),
             saveChannelMember: kp('saveChannelMember', (c, row) => gf.saveChannelMember(c, row)),
             deleteChannelMember: kp('deleteChannelMember', (c, id) => gf.deleteChannelMember(c, id)),
@@ -1171,7 +1171,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
             resetTask: kp('resetTask', (c, taskId) => gf.resetTask(c, taskId)),
             ackChannel: kp('ackChannel', (c, channelId, lastMessageId) => gf.ackChannel(c, channelId, lastMessageId)),
 
-            uploadFile: kp('uploadFile', (c, inp) => gf.uploadFile(c, inp)), //管理員或任一頻道成員
+            uploadFile: kp('uploadFile', (c, inp) => gf.uploadFile(c, inp)), //系統管理者或任一頻道成員
             getFileInfo: kp('getFileInfo', (c, id) => gf.getFileInfo(c, id)),
             getStats: kp('getStats', (c) => gf.getStats(c)), //只計呼叫者有權看之頻道
 

@@ -337,7 +337,7 @@ async function selectMembersChannel(page, name) {
     await page.waitForTimeout(800)
 }
 
-//另一位管理員之寫入（arrange, 未走 UI）: 以頁面既有連線呼叫後端業務函式（不帶基準之外部呼叫）; 寫入前開啟測試實例之固定時鐘使 timeUpdate 確定, 寫入後關閉。
+//另一位系統管理者之寫入（arrange, 未走 UI）: 以頁面既有連線呼叫後端業務函式（不帶基準之外部呼叫）; 寫入前開啟測試實例之固定時鐘使 timeUpdate 確定, 寫入後關閉。
 async function otherAdminCall(page, fnName, args) {
     setFakeNow()
     try {
@@ -978,10 +978,10 @@ const CASES = [
         },
     },
     {
-        //E2E-014：後台頻道頁切編輯模式並就地改了「訂單服務」描述（尚未儲存）, 此時另一位管理員改了別的頻道 → 畫面不丟草稿並出現「資料已被他人更新」提示;
+        //E2E-014：後台頻道頁切編輯模式並就地改了「訂單服務」描述（尚未儲存）, 此時另一位系統管理者改了別的頻道 → 畫面不丟草稿並出現「資料已被他人更新」提示;
         //按儲存被整次拒收（本次未儲存任何變更）, 草稿仍保留; 按提示條「重新載入」並確認後換成最新資料、草稿捨棄。
         //6 步真實 user path：①rail 點 Admin（預設頻道子頁）②點編輯模式開關 ③就地編輯「訂單服務」描述欄（Pattern B, 產生草稿）
-        //  ④另一位管理員改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條 ⑥點儲存→被拒訊息框→確定 ⑦點重新載入→確認→最新資料。
+        //  ④另一位系統管理者改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條 ⑥點儲存→被拒訊息框→確定 ⑦點重新載入→確認→最新資料。
         //修前（E7）: 步驟④推播即把整張表重建, 草稿靜默消失而儲存鈕仍亮; 本案例於步驟⑤驗草稿仍在。
         //清理：寫入皆在測試實例資料庫, 由 per-case reseed 還原; 固定時鐘於 arrange 後立即關閉。
         name: 'E2E-014-channels-draft-stale',
@@ -1008,7 +1008,7 @@ const CASES = [
             await waitUntilExist(page, '草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="channels-save-btn"]'), { timeout: 8000 })
             assert.strictEqual(await gridCellText(page, riDemo, 'description'), draft, '前置: 草稿已在格內')
 
-            //arrange（未走 UI）：另一位管理員改「報表產製」描述 → 資料通道推播整張 channels 表
+            //arrange（未走 UI）：另一位系統管理者改「報表產製」描述 → 資料通道推播整張 channels 表
             await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherDesc }]])
             let noticeTxt = await waitStaleNotice(page)
 
@@ -1077,10 +1077,10 @@ const CASES = [
         },
     },
     {
-        //E2E-015：後台成員頁（預設頻道「訂單服務」）切編輯模式並就地改了 agent-demo 的角色（尚未儲存）, 此時另一位管理員為同頻道新增了成員 → 出現「資料已被他人更新」提示且草稿保留;
+        //E2E-015：後台成員頁（預設頻道「訂單服務」）切編輯模式並就地改了 agent-demo 的角色（尚未儲存）, 此時另一位系統管理者為同頻道新增了成員 → 出現「資料已被他人更新」提示且草稿保留;
         //按儲存被整次拒收（本次未儲存任何變更, 他人新增之成員不受影響）, 按「重新載入」並確認後顯示含他人新增之最新成員清單。
         //6 步真實 user path：①rail 點 Admin→子選單「成員」②點編輯模式開關 ③就地編輯 agent-demo 之角色欄（Pattern B）
-        //  ④另一位管理員新增成員（arrange, 未走 UI: saveChannelMembers 不帶基準之外部呼叫）⑤見提示條（成員頁以 store.channelMembers 推播比對基準）⑥點儲存→被拒→確定 ⑦點重新載入→確認→最新清單。
+        //  ④另一位系統管理者新增成員（arrange, 未走 UI: saveChannelMembers 不帶基準之外部呼叫）⑤見提示條（成員頁以 store.channelMembers 推播比對基準）⑥點儲存→被拒→確定 ⑦點重新載入→確認→最新清單。
         //清理：同 E2E-014。
         name: 'E2E-015-members-stale-save',
         stages: ['E2E-015-1-draft-stale', 'E2E-015-2-click-save', 'E2E-015-3-save-rejected', 'E2E-015-4-reloaded'],
@@ -1108,7 +1108,7 @@ const CASES = [
             await waitUntilExist(page, '草稿成立: 儲存鈕出現', () => !!document.querySelector('[data-fmid="members-save-btn"]'), { timeout: 8000 })
             assert.strictEqual(await gridCellText(page, riAgent, 'role'), draftRole, '前置: 草稿已在格內')
 
-            //arrange（未走 UI）：另一位管理員為同頻道新增成員 → 資料通道推播 channelMembers 表
+            //arrange（未走 UI）：另一位系統管理者為同頻道新增成員 → 資料通道推播 channelMembers 表
             await otherAdminCall(page, 'saveChannelMembers', [CH_DEMO_ID, [{ memberId: otherMember, memberType: 'human', role: 'member' }]])
             let noticeTxt = await waitStaleNotice(page)
 
@@ -1227,11 +1227,11 @@ const CASES = [
         },
     },
     {
-        //E2E-016：後台頻道頁切編輯模式、雙擊「訂單服務」描述欄並輸入文字但尚未按 Enter（編輯器開啟中、輸入尚未進列資料）, 此時另一位管理員改了別的頻道 →
+        //E2E-016：後台頻道頁切編輯模式、雙擊「訂單服務」描述欄並輸入文字但尚未按 Enter（編輯器開啟中、輸入尚未進列資料）, 此時另一位系統管理者改了別的頻道 →
         //編輯器與已輸入之文字不丟、出現「資料已被他人更新」提示（視同草稿）; 按 Esc 取消編輯後依一般規則換成最新資料（無未存修改）;
         //另一輪同樣情境改按 Enter 提交 → 成為草稿（儲存鈕出現、提示條保留、畫面仍不顯示他人新值）, 點儲存整次被拒（基準凍結, 未存任何變更）。
         //6 步真實 user path：①rail 點 Admin（預設頻道子頁）②點編輯模式開關 ③雙擊「訂單服務」描述欄並輸入（不按 Enter）
-        //  ④另一位管理員改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條且編輯器仍開 ⑥按 Esc → 最新資料;
+        //  ④另一位系統管理者改「報表產製」描述（arrange, 未走 UI: 頁面既有連線呼叫 saveChannels, 不帶基準之外部呼叫）⑤見提示條且編輯器仍開 ⑥按 Esc → 最新資料;
         //  再一輪③④⑤後按 Enter → 草稿 → 點儲存 → 被拒。
         //修前（task-verify01 N1）: 步驟④推播即把整張表重建, 編輯器被關閉、已輸入之文字靜默丟失（isModified 看不到未提交之輸入）。
         //清理：寫入皆在測試實例資料庫, 由 per-case reseed 還原; 固定時鐘於 arrange 後立即關閉。
@@ -1260,7 +1260,7 @@ const CASES = [
             await typeGridCellKeepEditing(page, riDemo, 'description', draftA)
             assert.ok(!(await page.locator('[data-fmid="channels-save-btn"]').count()), '前置: 輸入尚未提交, 不應有儲存鈕（尚無未存修改）')
 
-            //arrange（未走 UI）：另一位管理員改「報表產製」描述 → 資料通道推播整張 channels 表
+            //arrange（未走 UI）：另一位系統管理者改「報表產製」描述 → 資料通道推播整張 channels 表
             await otherAdminCall(page, 'saveChannels', [[{ id: 'id-for-channel-report', description: otherA }]])
             await waitUntilExist(page, '前端 store 已收到他人推播', (d) => (window.$vo.$store.state.channels || []).some((c) => c.id === 'id-for-channel-report' && c.description === d), { timeout: 25000, arg: otherA })
             await page.waitForTimeout(500) //負向觀察窗: 推播處理後若被重建, 編輯器會在此期間消失
@@ -1348,10 +1348,10 @@ const CASES = [
         },
     },
     {
-        //E2E-017：後台成員頁（預設頻道「訂單服務」）切編輯模式、雙擊 agent-demo 之角色欄並輸入文字但尚未按 Enter, 此時另一位管理員為同頻道新增成員 →
+        //E2E-017：後台成員頁（預設頻道「訂單服務」）切編輯模式、雙擊 agent-demo 之角色欄並輸入文字但尚未按 Enter, 此時另一位系統管理者為同頻道新增成員 →
         //編輯器與已輸入之文字不丟、出現「資料已被他人更新」提示（視同草稿）; 按 Esc 取消後提示條消失（無未存修改）;
         //另一輪同樣情境改按 Enter 提交 → 草稿（儲存鈕出現、提示條保留）, 點儲存整次被拒。
-        //6 步真實 user path：①rail 點 Admin→子選單「成員」②點編輯模式開關 ③雙擊角色欄並輸入（不按 Enter）④另一位管理員新增成員（arrange, 未走 UI）⑤見提示條且編輯器仍開 ⑥按 Esc;
+        //6 步真實 user path：①rail 點 Admin→子選單「成員」②點編輯模式開關 ③雙擊角色欄並輸入（不按 Enter）④另一位系統管理者新增成員（arrange, 未走 UI）⑤見提示條且編輯器仍開 ⑥按 Esc;
         //  再一輪③④⑤後按 Enter → 草稿 → 點儲存 → 被拒。
         //成員頁快照本不隨推播重建（既有行為, 見已知缺口）, 本案驗證重點為: 提示（修前編輯器開啟中不顯示提示條, 使用者不知畫面已過期）與按 Enter 提交後草稿保留、存檔被拒。
         //清理：同 E2E-016。

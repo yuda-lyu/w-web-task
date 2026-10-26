@@ -55,7 +55,7 @@ saveChannelMembers(channelId, rows, { baseline })         → 同 saveChannels
 deleteChannelMembers(channelId, ids, { baseline })        → { deleted: [id] }
 ```
 
-- `baseline`: `[[id, 'h1:…'], …]`(規格 §5), 由前端對載入時所見快照以 `buildBaseline(rows, contract)` 自算。**後台 UI 必送**; 外部呼叫(持管理者權杖直打 `/api/main`)可不帶 → 不比對、其餘規則照舊(規格 §8、方案 v2 §2.7)。**格式或版本不識 → `baselineFormat`, 不得降級為未帶**。
+- `baseline`: `[[id, 'h1:…'], …]`(規格 §5), 由前端對載入時所見快照以 `buildBaseline(rows, contract)` 自算。**後台 UI 必送**; 外部呼叫(持系統管理者權杖直打 `/api/main`)可不帶 → 不比對、其餘規則照舊(規格 §8、方案 v2 §2.7)。**格式或版本不識 → `baselineFormat`, 不得降級為未帶**。
 - `deleteChannels` / `deleteChannelMembers` 之 baseline 只含**被選取列**(逐列粒度, 與 api 套件 `deleteApi(userId, id, { baseline })` 一致); 理由: 刪除是針對特定列之命令, 他列被改不應擋(原則 10 刪除先刪先贏)。
 
 ### 5.2 diff 規則(有 baseline 時; 鎖內以新鮮讀取為準)
@@ -74,7 +74,7 @@ deleteChannelMembers(channelId, ids, { baseline })        → { deleted: [id] }
 
 ### 5.3 與既有單筆 API 之關係
 
-**保留** `saveChannel` / `deleteChannel` / `saveChannelMember` / `deleteChannelMember`(薄包裝, 與清單 API 共用同一內部核心), 前端不再呼叫。理由: ①持管理者權杖直打 `/api/main` 之外部工具可能使用(移除屬破壞性); ②既有測試 `api-doubleclick` DC-03～DC-07、`unit-procCore` 雙擊並行案依賴(部分列只帶 `{id, agentId}`, 故不帶基準之修改須容許部分欄位); ③共用核心使額外成本小。收緊項: 修改只改不增(列已刪 → `rowNotFound`)、刪除未命中 → `rowNotFound`、不採用伺服器專有欄位、取表鎖; 可選帶單列 `{ baseline }`。以 R-CONC-08 之盤點指令保證前端零呼叫。
+**保留** `saveChannel` / `deleteChannel` / `saveChannelMember` / `deleteChannelMember`(薄包裝, 與清單 API 共用同一內部核心), 前端不再呼叫。理由: ①持系統管理者權杖直打 `/api/main` 之外部工具可能使用(移除屬破壞性); ②既有測試 `api-doubleclick` DC-03～DC-07、`unit-procCore` 雙擊並行案依賴(部分列只帶 `{id, agentId}`, 故不帶基準之修改須容許部分欄位); ③共用核心使額外成本小。收緊項: 修改只改不增(列已刪 → `rowNotFound`)、刪除未命中 → `rowNotFound`、不採用伺服器專有欄位、取表鎖; 可選帶單列 `{ baseline }`。以 R-CONC-08 之盤點指令保證前端零呼叫。
 
 ### 5.4 鎖之組合與取鎖順序
 

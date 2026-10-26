@@ -110,7 +110,7 @@ let kpLang = {
     },
     anUnexpectedErrorOccurred: {
         eng: 'An unexpected error occurred, please contact the administrator',
-        cht: '發生非預期錯誤，請洽管理員',
+        cht: '發生非預期錯誤，請洽系統管理者',
     },
     getDataError: {
         eng: 'Failed to get data, please try again later',
@@ -190,11 +190,11 @@ let kpLang = {
         eng: 'Token does not have permission',
         cht: '權杖無存取權限',
     },
-    errUserNotAdmin: { //管理類函數 (頻道與成員之建立、修改、刪除) 限系統管理員 (C2, spec D20)
+    errUserNotAdmin: { //管理類函數 (頻道與成員之建立、修改、刪除) 限系統管理者 (C2, spec D20)
         eng: 'Only a system administrator can do this',
-        cht: '僅系統管理員可執行此操作',
+        cht: '僅系統管理者可執行此操作',
     },
-    errChannelNotMember: { //頻道內容 (訊息、任務、游標、成員名冊) 與檔案限系統管理員或頻道成員 (C2, spec D20)
+    errChannelNotMember: { //頻道內容 (訊息、任務、游標、成員名冊) 與檔案限系統管理者或頻道成員 (C2, spec D20)
         eng: 'You are not a member of this channel',
         cht: '您不是此頻道的成員',
     },
@@ -340,7 +340,7 @@ let kpLang = {
     },
     errRowsInvalid: { //rowsInvalid: 庫內列主鍵重複或缺漏 (伺服端資料錯誤)
         eng: 'The stored data is inconsistent. Please contact the administrator.',
-        cht: '資料庫內資料異常，請洽管理員',
+        cht: '資料庫內資料異常，請洽系統管理者',
     },
     saveRolledBack: { //寫入中途硬失敗 (非競爭), 已依前像還原
         eng: 'Saving failed and all changes were rolled back. Nothing was changed.',
@@ -348,7 +348,7 @@ let kpLang = {
     },
     saveWriteFail: { //寫入中途硬失敗且補償亦失敗: 部分資料可能已寫入
         eng: 'Saving failed and part of the data may have been written. Please reload to check, or contact the administrator.',
-        cht: '儲存失敗，部分資料可能已寫入，請重新載入確認或洽管理員',
+        cht: '儲存失敗，部分資料可能已寫入，請重新載入確認或洽系統管理者',
     },
     errChannelNameInvalid: { //頻道名稱必填 (所有入口一致, 原則 4)
         eng: 'Channel name is required',

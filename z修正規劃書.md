@@ -17,7 +17,7 @@
 - **NoSQL/mingo 注入**: 所有 `select({...})` 查詢值先過 `isestr()` 守衛, 僅字串可通過, 無法夾帶 operator 物件。
 - **archiveSweep 時間比較**(主動查證之唯一實質疑點): cutoff 用 `dayjs().format('YYYY-MM-DDTHH:mm:ss.SSSZ')`(procCore.mjs:624)與 `nowms2str()`(wsemi 原始碼確認同格式)一致, 單機固定 TZ 下字典序=時序, **正確無 bug**。
 - **XSS 兩處消毒**(D10)、**getFile 白名單**、**身分權威取自 token**(D8)、**kmx 三動詞對稱守衛**(D6)、前端 core() 五段 + pm.resolve() 第一行、無原生 alert/confirm、無 async inline arrow —— 皆已落地。
-- **D 節觀察(不建議動, 依真痛三條件)**: saveChannel 之 agent member 建列非原子(後台管理員 CRUD, 並發非現實場景, 需求擴大型假痛)、getFile 一律 404、純圖 asTask title 空、全表掃描、procLang 保留鍵 —— 均命中既有決策或後果不具體。
+- **D 節觀察(不建議動, 依真痛三條件)**: saveChannel 之 agent member 建列非原子(後台系統管理者 CRUD, 並發非現實場景, 需求擴大型假痛)、getFile 一律 404、純圖 asTask title 空、全表掃描、procLang 保留鍵 —— 均命中既有決策或後果不具體。
 
 **結論**: 本專案本輪三維度稽核**無任何待修項**。
 

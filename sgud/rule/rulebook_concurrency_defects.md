@@ -8,7 +8,7 @@
 
 | 缺陷 | 探測 | 結果(2026-10-22) | 規格對應 |
 |---|---|---|---|
-| **E3** 成員存檔回寫游標 | `probe-e3.mjs` | 離開碼 1, **RED ×3**: ack 到 `MSG-100` 後管理員存成員頁 → 游標回 `""`; agent `getChannelsList` 讀到 `""`(整段訊息重讀); 未被編輯之 agent 列最後修改者被蓋成 admin-1 | V5 |
+| **E3** 成員存檔回寫游標 | `probe-e3.mjs` | 離開碼 1, **RED ×3**: ack 到 `MSG-100` 後系統管理者存成員頁 → 游標回 `""`; agent `getChannelsList` 讀到 `""`(整段訊息重讀); 未被編輯之 agent 列最後修改者被蓋成 admin-1 | V5 |
 | **E2** 封存 vs `resetTask` | `probe-e2.mjs` | 離開碼 1, **RED ×3**: A) `tasksArchive.save` 人為延遲 300ms, 期間 `resetTask`(回 pending)→ 掃描回 `tasksMoved:1`, 熱表 0 筆、冷表 1 筆 state=error; B) 無人為延遲, 120 個過齡 error 任務、掃描中並行重置 → **成功重置 118、其中 117 其後消失**(自然競態窗為「select → 最後一筆 del」全程) | 方案 §六 E2 |
 | **E4** 逐列存檔部分寫入 | `probe-e4.mjs` | 離開碼 1, **RED ×3**: A) 頻道三列皆改名、第 2 次寫入失敗 → 庫內 `c1-EDITED,c2,c3`(第 1 列已改); B) 成員頁新增 2 列、第 2 次失敗 → 庫內已有 alice; 按重試 → **alice 重複 2 列** | V12 |
 | **E7** 推播丟草稿 | `probe-e7.mjs` | 離開碼 1, **RED ×3**(最小 Vue 2 + Vuex 重現): 草稿 `DRAFT-A` 於推播後變 `alpha`; `isModified` 仍 true; 內容全同之推播亦丟 | V11 |
@@ -63,7 +63,7 @@
 | V2 | **不適用** | 本套件無外部同步 / 外部匯入(channels / channelMembers 僅後台寫入, 無整批重寫來源; 原則 11 之 `C:\opensrcOper\dspec\外部匯入之定義與機制.md` 未涵蓋本套件, 見 Q8) | 離線工具 `g.initialData` 只在服務停止時執行, 固定 id 重播種摘要不變, 另列一案「重播種後舊基準可存」可選 |
 | V3 | **不適用** | 同上 | — |
 | V4 | unit(變形) | 本套件無雙方欄位, 但**系統新增成員列**(ack 缺列 W16、saveChannel 補 agent 列 W03)為清單新增 → 持舊畫面存成員頁應被拒(`added`) | 驗證「系統新增亦使舊畫面失效」 |
-| V5 | unit + api | = E3 探測轉綠: ack 後管理員存檔, 游標維持 | 另驗清單存檔不蓋未變動列之稽核欄 |
+| V5 | unit + api | = E3 探測轉綠: ack 後系統管理者存檔, 游標維持 | 另驗清單存檔不蓋未變動列之稽核欄 |
 | V6 | unit | = O1 轉綠: 修改已刪之列 → `rowNotFound`、列不復活(單筆 API 與清單 API 各一) | ack 缺列路徑另驗不產生殘缺列(O3 轉綠) |
 | V7 | unit | = O2 轉綠: 刪除不存在之列(帶 / 不帶基準)→ `rowNotFound` | — |
 | V8 | unit + api | 整表存檔期間他人新增: channels(基準後新增 → 拒收且他人列保留)、members(他頻道新增不影響本頻道存檔、本頻道新增則拒收) | 驗刪除集合＝基準 − 送出 |

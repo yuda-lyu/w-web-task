@@ -67,7 +67,7 @@
 
 ### 2.1 業務函式與對外路由全集(歸類依方案 v2 §3.4)
 
-**函式全集 22** = `server/procCore.mjs` 匯出 21(`:752-774`)+ `WWebTask.mjs` 本地之 `getWebInfor`。**kpFunExt 20**(`server/WWebTask.mjs:1028-1056`, 資料通道 `/api/main` 經連線閘 `verifyClientUser`, 即**後台管理者**可呼叫); **HTTP 路由 16**(`WWebTask.mjs:474-927`, 以 app 權杖 `verifyAppUser` 守門, 即 **agent / 外部應用**)。
+**函式全集 22** = `server/procCore.mjs` 匯出 21(`:752-774`)+ `WWebTask.mjs` 本地之 `getWebInfor`。**kpFunExt 20**(`server/WWebTask.mjs:1028-1056`, 資料通道 `/api/main` 經連線閘 `verifyClientUser`, 即**後台系統管理者**可呼叫); **HTTP 路由 16**(`WWebTask.mjs:474-927`, 以 app 權杖 `verifyAppUser` 守門, 即 **agent / 外部應用**)。
 
 | 類(§3.4) | 函式(procCore 行) | kpFunExt 名 | HTTP 路由 | 處置 |
 |---|---|---|---|---|

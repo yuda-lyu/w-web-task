@@ -2,9 +2,9 @@
 //對應 spec/設計要點與取捨.md D17 決策 2(表操作只開 select)、決策 3(連線閘套用 verifyClientUser); CLAUDE_rulebook.md D17-2 / D17-3
 //  DC-01「表操作只開 select」→ 函數清單含兩表之 select、不含任一表之 insert / save / del
 //  DC-02「寫入一律經 kpFunExt; 直打表操作改收 invalid func[…]」→ 六個直寫函數皆被拒, 且以 kpFunExt 讀回之資料不變
-//  DC-03「select 供前端同步」→ 已認證之管理者可 select 兩表, 含種子頻道
+//  DC-03「select 供前端同步」→ 已認證之系統管理者可 select 兩表, 含種子頻道
 //  DC-04「被 verifyClientUser 拒絕者, 其資料通道請求一律 permission denied, 並記 srLog.error({ event:'verifyConn', err:'errUserNoPermission' })」
-//        → 非管理者之讀與寫皆被拒、寫入未落地、srLog 逐筆; 與登入檢查 /api/getUserByToken 同一判定(errUserNoPermission)
+//        → 非系統管理者之讀與寫皆被拒、寫入未落地、srLog 逐筆; 與登入檢查 /api/getUserByToken 同一判定(errUserNoPermission)
 //測試權杖(srv.mjs, 受 NODE_ENV!=='production' 守門): 'sys'(id-for-admin, isAdmin='y')、'{token-for-nonadmin}'(id-for-nonadmin, isAdmin='n'; srv.mjs 之 verifyClientUser 只放行 isAdmin='y')
 //資料: 共用 harness 開場之種子(api 各檔不逐案重置); 本檔新建之頻道於 after 以 kpFunExt 刪除
 //跑法: npx mocha test/api-dataChannel.test.mjs --timeout 180000(須持測試鎖)
@@ -20,7 +20,7 @@ const TABLES = ['channels', 'channelMembers']
 const METHODS_WRITE = ['insert', 'save', 'del']
 
 
-//kpFunExt 呼叫(以管理者): 成功回 msg, 否則拋錯
+//kpFunExt 呼叫(以系統管理者): 成功回 msg, 否則拋錯
 async function kpfun(func, args) {
     let r = await postMain(TK_ADMIN, TK_ADMIN, func, args)
     let out = outputOf(r)
@@ -52,7 +52,7 @@ describe('api-dataChannel(資料通道之表操作只開 select、連線閘套�
     })
 
     after(async function() {
-        //清理: 本檔建立之頻道(含修前紅燈時直寫或非管理者寫入者)一律以 kpFunExt 刪除; 刪後回驗
+        //清理: 本檔建立之頻道(含修前紅燈時直寫或非系統管理者寫入者)一律以 kpFunExt 刪除; 刪後回驗
         let names = [nameProbe, nameNonadmin, 'dc-direct-insert', 'dc-hijacked']
         let cs = await kpfun('getChannelsList', [])
         for (let c of cs.filter((x) => names.includes(x.name) || x.id === 'dc-direct-insert')) {
@@ -109,7 +109,7 @@ describe('api-dataChannel(資料通道之表操作只開 select、連線閘套�
         assert.ok(!ms.some((m) => m.memberId === 'agent-x'), `channelMembers 直寫不得落地, 實得 ${JSON.stringify(ms)}`)
     })
 
-    it('DC-03 同步用之 select: 管理者可 select 兩表, channels 含種子頻道', async function() {
+    it('DC-03 同步用之 select: 系統管理者可 select 兩表, channels 含種子頻道', async function() {
         let rc = await postMain(TK_ADMIN, TK_ADMIN, 'channels.select', [])
         let oc = outputOf(rc)
         assert.ok(oc && oc.state === 'success' && Array.isArray(oc.msg), `channels.select 應成功, 實得 ${rc.text}`)
@@ -119,13 +119,13 @@ describe('api-dataChannel(資料通道之表操作只開 select、連線閘套�
         assert.ok(om && om.state === 'success' && Array.isArray(om.msg), `channelMembers.select 應成功, 實得 ${rm.text}`)
     })
 
-    it('DC-04 被 verifyClientUser 拒絕之非管理者: 資料通道之讀與寫皆 permission denied、寫入未落地; srLog 逐筆 verifyConn errUserNoPermission; 登入檢查同為 errUserNoPermission', async function() {
+    it('DC-04 被 verifyClientUser 拒絕之非系統管理者: 資料通道之讀與寫皆 permission denied、寫入未落地; srLog 逐筆 verifyConn errUserNoPermission; 登入檢查同為 errUserNoPermission', async function() {
         let snap = snapshotLogs()
         let rRead = await postMain(TK_NONADMIN, TK_NONADMIN, 'getWebInfor')
         assert.strictEqual(rRead.status, 200)
-        assert.strictEqual(rRead.obj && rRead.obj.error, 'permission denied', `非管理者之讀應被連線閘拒絕, 實得 ${rRead.text}`)
+        assert.strictEqual(rRead.obj && rRead.obj.error, 'permission denied', `非系統管理者之讀應被連線閘拒絕, 實得 ${rRead.text}`)
         let rWrite = await postMain(TK_NONADMIN, TK_NONADMIN, 'saveChannel', [{ name: nameNonadmin }])
-        assert.strictEqual(rWrite.obj && rWrite.obj.error, 'permission denied', `非管理者之寫應被連線閘拒絕, 實得 ${rWrite.text}`)
+        assert.strictEqual(rWrite.obj && rWrite.obj.error, 'permission denied', `非系統管理者之寫應被連線閘拒絕, 實得 ${rWrite.text}`)
         let rLogin = await httpGet(`/api/getUserByToken?token=${encodeURIComponent(TK_NONADMIN)}`)
         assert.deepStrictEqual(rLogin.body, { state: 'error', msg: 'errUserNoPermission' }, `登入檢查應同為 errUserNoPermission, 實得 ${rLogin.text}`)
         //srLog: 連線閘之拒絕各 1 筆(只記 key 與 apiType, 不記權杖)+ 登入檢查之呼叫點 1 筆
@@ -138,7 +138,7 @@ describe('api-dataChannel(資料通道之表操作只開 select、連線閘套�
         ])
         assert.ok(recs.slice(0, 2).every((r) => r.apiType === 'main'), 'verifyConn 之記錄應帶 apiType main')
         //寫入未落地
-        assert.deepStrictEqual(await channelsByName(nameNonadmin), [], '非管理者之 saveChannel 不得落地')
+        assert.deepStrictEqual(await channelsByName(nameNonadmin), [], '非系統管理者之 saveChannel 不得落地')
     })
 
 })

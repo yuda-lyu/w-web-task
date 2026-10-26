@@ -35,7 +35,7 @@
 | D20 呼叫者身分驗證與存取矩陣(C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊; task-run01) | `api-callerMatrix`(真後端; 入口 × 傳輸 × 7 類呼叫者 462 格 + 入口全集 + 系統函數 / 輪詢 / 通訊路由 / C3 案)、`unit-access`(角色判準、登錄 fail-closed、成員判準、規則、清單收斂)、`unit-mAccess`(前端 `canManage`); 變異驗證見 `rulebook_security.md` R-AUTHZ-10 | `npx mocha test/unit-access.test.mjs test/unit-mAccess.test.mjs --timeout 60000`; api `npx mocha test/api-callerMatrix.test.mjs --timeout 180000`(須持測試鎖) |
 | D17-1 w-serv-orm 已移除之三鍵於入口拒絕、無副作用 | `unit-optRemoved`(不起伺服器、不開埠) | `npx mocha test/unit-optRemoved.test.mjs --timeout 60000` |
 | D17-2 資料通道只開 select、authorizeExec 拒絕記 srLog | `unit-authorizeExec`、`api-dataChannel` | `npx mocha test/unit-authorizeExec.test.mjs`; api 另 `npx mocha test/api-dataChannel.test.mjs --timeout 180000`(須持測試鎖) |
-| D17-3 資料通道連線閘套用 verifyClientUser | `api-dataChannel`(非管理者被拒)、`api-tokenLeak` E7(verifyClientUser 拋錯) | `npx mocha test/api-dataChannel.test.mjs test/api-tokenLeak.test.mjs --timeout 180000`(須持測試鎖) |
+| D17-3 資料通道連線閘套用 verifyClientUser | `api-dataChannel`(非系統管理者被拒)、`api-tokenLeak` E7(verifyClientUser 拋錯) | `npx mocha test/api-dataChannel.test.mjs test/api-tokenLeak.test.mjs --timeout 180000`(須持測試鎖) |
 
 ## e2e 落地映射(對應全域技能[role-coder-for-test-e2e] §3 契約)
 

@@ -161,7 +161,7 @@ describe('unit-access(呼叫者角色與成員檢查)', function() {
             //requireChannel
             await access.requireChannel('f', ADMIN, A)
             await access.requireChannel('f', ADMIN, B)
-            await access.requireChannel('f', ADMIN, 'no-such-channel') //管理員不擋(業務函式回 errChannelNotFound)
+            await access.requireChannel('f', ADMIN, 'no-such-channel') //系統管理者不擋(業務函式回 errChannelNotFound)
             await access.requireChannel('f', MEMBER, A)
             assert.strictEqual(await rejKey(() => access.requireChannel('getMessages', MEMBER, B)), KEY_NOT_MEMBER)
             assert.strictEqual(await rejKey(() => access.requireChannel('getMessages', OUT, A)), KEY_NOT_MEMBER)
@@ -264,7 +264,7 @@ describe('unit-access(呼叫者角色與成員檢查)', function() {
             assert.strictEqual((await gf.claimTask(MEMBER, taskA)).state, 'running')
             assert.strictEqual(await rejKey(() => gf.respondTask(OUT, taskA, 'r', 'done')), 'errTaskNotFound')
             assert.strictEqual((await env.woItems.tasks.select({ id: taskA }))[0].state, 'running')
-            //管理員
+            //系統管理者
             assert.strictEqual((await gf.claimTask(ADMIN, taskB)).state, 'running')
             //檔案
             assert.strictEqual(await rejKey(() => gf.uploadFile(OUT, { name: 'a.png', type: 'image/png', dataBase64: PNG })), KEY_NOT_MEMBER)
@@ -330,11 +330,11 @@ describe('unit-access(呼叫者角色與成員檢查)', function() {
             assert.strictEqual(await rejKey(() => gf.getArchivedTasks(MEMBER, B)), KEY_NOT_MEMBER)
             assert.strictEqual(await rejKey(() => gf.getArchivedMessages(MEMBER, B)), KEY_NOT_MEMBER)
             assert.strictEqual(await rejKey(() => gf.getArchivedTasks(OUT, A)), KEY_NOT_MEMBER)
-            assert.deepStrictEqual((await gf.getArchivedTasks(ADMIN, B)).map((x) => x.id), ['arch-task-b'], '管理員讀任一頻道')
+            assert.deepStrictEqual((await gf.getArchivedTasks(ADMIN, B)).map((x) => x.id), ['arch-task-b'], '系統管理者讀任一頻道')
         })
     })
 
-    it('A11 ackChannel: 授權通過後成員列被管理員移除, 一般使用者不得藉缺列路徑重新加回; 管理員仍可建列(外審 opus#1 / sol#8)', async function() {
+    it('A11 ackChannel: 授權通過後成員列被系統管理者移除, 一般使用者不得藉缺列路徑重新加回; 系統管理者仍可建列(外審 opus#1 / sol#8)', async function() {
         await mkWorld('access-a11', async ({ env, gf, A }) => {
             let row = (await env.woItems.channelMembers.select({ channelId: A, memberId: 'member-1' }))[0]
             let t = env.woItems.channelMembers
@@ -345,7 +345,7 @@ describe('unit-access(呼叫者角色與成員檢查)', function() {
             t.select = async (...a) => {
                 let r = await orig.apply(t, a)
                 n += 1
-                if (n === 1) { //第 1 次 select 為 requireChannel 之成員檢查: 通過後暫停, 讓管理員於授權檢查與 ack 之間移除成員列
+                if (n === 1) { //第 1 次 select 為 requireChannel 之成員檢查: 通過後暫停, 讓系統管理者於授權檢查與 ack 之間移除成員列
                     reached.open()
                     await g.promise
                 }
@@ -371,7 +371,7 @@ describe('unit-access(呼叫者角色與成員檢查)', function() {
             g.open()
             assert.strictEqual(await rejKey(() => p), KEY_NOT_MEMBER)
             assert.strictEqual((await env.woItems.channelMembers.select({ channelId: A, memberId: 'member-1' })).length, 0, '被移除者不得重新建列')
-            //對照: 管理員 ack 缺列路徑可建列(游標列, 修前行為不變)
+            //對照: 系統管理者 ack 缺列路徑可建列(游標列, 修前行為不變)
             await gf.ackChannel(ADMIN, A, 'cursor-2')
             let ar = await env.woItems.channelMembers.select({ channelId: A, memberId: 'admin-1' })
             assert.strictEqual(ar.length, 1)

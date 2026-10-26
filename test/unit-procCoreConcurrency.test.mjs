@@ -287,7 +287,7 @@ describe('unit-procCoreConcurrency', function() {
     // ── E3 / V5 / V14: 伺服器專有欄位 (agent 已讀游標) ──────────────────────────────
     describe('E3 / V5: lastSeenMessageId 為伺服器專有, 成員清單存檔不回寫', function() {
 
-        it('E3 轉綠 / V5: ack 後管理員以含舊游標之整列存檔 → 游標維持系統所寫之值; 未動列不蓋稽核欄', async function() {
+        it('E3 轉綠 / V5: ack 後系統管理者以含舊游標之整列存檔 → 游標維持系統所寫之值; 未動列不蓋稽核欄', async function() {
             await withEnv('e3', async (env) => {
                 let ch = (await seedChannels(env, [{ name: 'e3', agentId: AGENT }]))[0] //連帶建 agent 成員列
                 await seedMembers(env, ch.id, [{ memberId: 'human-1', memberType: 'human' }])
@@ -295,7 +295,7 @@ describe('unit-procCoreConcurrency', function() {
                 await env.pc.ackChannel(AGENT, ch.id, 'MSG-100') //ack 推進
                 let agentRow = (await env.woItems.channelMembers.select({ memberId: AGENT }))[0]
                 assert.strictEqual(agentRow.lastSeenMessageId, 'MSG-100')
-                //管理員改 human-1 之角色並整份提交 (agent 列帶舊游標 '')
+                //系統管理者改 human-1 之角色並整份提交 (agent 列帶舊游標 '')
                 let rows = JSON.parse(JSON.stringify(M.rows))
                 rows.find((r) => r.memberId === 'human-1').role = 'owner'
                 assert.strictEqual(rows.find((r) => r.memberId === AGENT).lastSeenMessageId, '', '前置: 畫面上之游標為舊值')
@@ -366,7 +366,7 @@ describe('unit-procCoreConcurrency', function() {
     // ── V14: 並行 —— 比對與寫入間插不進他人寫入 (同鎖) ───────────────────────────────
     describe('V14: 表鎖 —— 比對與寫入間插不進他人寫入', function() {
 
-        it('兩位管理員以同一基準並行存檔, 其一寫入中人為延遲 → 恰一成功, 另一 saveStale (無表鎖則兩者皆成功＝遺失更新)', async function() {
+        it('兩位系統管理者以同一基準並行存檔, 其一寫入中人為延遲 → 恰一成功, 另一 saveStale (無表鎖則兩者皆成功＝遺失更新)', async function() {
             await withEnv('v14a', async (env) => {
                 await seedChannels(env, [{ name: 'p1' }, { name: 'p2' }])
                 let A = await loadChannels(env)
@@ -2081,7 +2081,7 @@ describe('unit-procCoreConcurrency', function() {
             await withEnv('noagent', async (env) => {
                 let ch = (await seedChannels(env, [{ name: 'na', agentId: AGENT }, { name: 'nb' }]))[0]
                 let agentRow = (await env.woItems.channelMembers.select({ channelId: ch.id, memberId: AGENT }))[0]
-                await env.woItems.channelMembers.del({ id: agentRow.id }) //直接刪 (模擬已被管理員刪除之 agent 列)
+                await env.woItems.channelMembers.del({ id: agentRow.id }) //直接刪 (模擬已被系統管理者刪除之 agent 列)
                 let A = await loadChannels(env)
                 let rows = JSON.parse(JSON.stringify(A.rows))
                 rows.find((r) => r.name === 'nb').description = 'edited' //只改另一個頻道

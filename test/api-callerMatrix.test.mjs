@@ -2,15 +2,15 @@
 //對應 spec/設計要點與取捨.md D20(呼叫者身分驗證與存取矩陣)、dspec/使用者身分驗證原則.md 二.2、二.4、二.7、二之一、dspec/w-web呼叫者身分驗證.md C2 / C2b / C3;規則帳本 rulebook_security.md R-AUTHZ-01～06
 //
 //呼叫者(7 類; srv.mjs 之測試權杖, 受 NODE_ENV!=='production' 守門; 部署方 verifyClientUser / verifyAppUser 對 id-for-member / id-for-outsider 放行以測套件自身之檢查):
-//  NONE 無 token | U_MEMBER 使用者 token・一般使用者(測試中為頻道 A 之成員) | U_OUT 使用者 token・一般使用者(非任何頻道成員) | ADMIN 使用者 token・系統管理員('sys')
-//  AU_USER 應用系統 token・使用者用途綁一般使用者(反查回 id-for-member 之實際資料, 同 U_MEMBER) | AU_ADMIN 應用系統 token・使用者用途綁管理員(同 ADMIN) | AS 應用系統 token・系統服務用途(id='app:…'、isAdmin='y', 不綁使用者)
+//  NONE 無 token | U_MEMBER 使用者 token・一般使用者(測試中為頻道 A 之成員) | U_OUT 使用者 token・一般使用者(非任何頻道成員) | ADMIN 使用者 token・系統管理者('sys')
+//  AU_USER 應用系統 token・使用者用途綁一般使用者(反查回 id-for-member 之實際資料, 同 U_MEMBER) | AU_ADMIN 應用系統 token・使用者用途綁系統管理者(同 ADMIN) | AS 應用系統 token・系統服務用途(id='app:…'、isAdmin='y', 不綁使用者)
 //入口(25 個業務操作 × 頻道 A / B 變體 × 傳輸(資料通道 kpFunExt / HTTP REST)、2 個表 select、3 個系統函數、登入檢查、輪詢):
-//  管理類(頻道與成員之建立 / 修改 / 刪除) → 限系統管理員(isAdmin='y'; 判準取自 token 反查之使用者, 本套件無自有使用者表, 同 w-web-api): 一般使用者 errUserNotAdmin
-//  頻道內容(訊息、任務、已讀游標、成員名冊) → 限系統管理員或該頻道之有效成員: 非成員 errChannelNotMember(任務以 id 取用者為 errTaskNotFound, 不洩漏任務存在與否)
-//  檔案(上傳 / metadata / 串流) → 限系統管理員或任一頻道之有效成員(檔案不屬單一頻道; 無任何頻道者無使用理由)
+//  管理類(頻道與成員之建立 / 修改 / 刪除) → 限系統管理者(isAdmin='y'; 判準取自 token 反查之使用者, 本套件無自有使用者表, 同 w-web-api): 一般使用者 errUserNotAdmin
+//  頻道內容(訊息、任務、已讀游標、成員名冊) → 限系統管理者或該頻道之有效成員: 非成員 errChannelNotMember(任務以 id 取用者為 errTaskNotFound, 不洩漏任務存在與否)
+//  檔案(上傳 / metadata / 串流) → 限系統管理者或任一頻道之有效成員(檔案不屬單一頻道; 無任何頻道者無使用理由)
 //  清單與統計 → 任一已驗證者可呼叫, 但只回呼叫者有權看之頻道之資料(表 select 同)
 //
-//每格 = 一個入口 × 一個呼叫者; 每格各自建 fixture(新任務 / 新頻道 / 新成員列, 由系統管理員建), 呼叫後再讀回副作用(拒絕者零寫入)
+//每格 = 一個入口 × 一個呼叫者; 每格各自建 fixture(新任務 / 新頻道 / 新成員列, 由系統管理者建), 呼叫後再讀回副作用(拒絕者零寫入)
 //跑法: npx mocha test/api-callerMatrix.test.mjs --timeout 180000(須持測試鎖)
 import assert from 'assert'
 import fs from 'fs'
@@ -33,7 +33,7 @@ const TK = {
 }
 const CALLERS = Object.keys(TK)
 const ID_OF = { U_MEMBER: 'id-for-member', U_OUT: 'id-for-outsider', ADMIN: 'id-for-admin', AU_USER: 'id-for-member', AU_ADMIN: 'id-for-admin', AS: 'app:key-for-test' }
-const ADMIN_CLASS = ['ADMIN', 'AU_ADMIN', 'AS'] //isAdmin='y' 者(使用者 token・管理員、綁管理員之應用系統 token、系統服務用途)
+const ADMIN_CLASS = ['ADMIN', 'AU_ADMIN', 'AS'] //isAdmin='y' 者(使用者 token・系統管理者、綁系統管理者之應用系統 token、系統服務用途)
 const MEMBER_CLASS = ['U_MEMBER', 'AU_USER'] //id-for-member: 頻道 A 之成員
 const PREFIX = `cm-${Date.now()}`
 const AGENT_ID = `${PREFIX}-agent` //頻道 A、B 之主責 agent(存檔時自動建 agent 成員列; 供 getChannels?agentId= 過濾之收斂測試)
@@ -92,7 +92,7 @@ async function httpAs(c, method, path, query = {}, body = null) {
     return { state: res.status === 200 ? 'success' : 'error', msg: text.slice(0, 40), status: res.status }
 }
 
-//系統管理員直呼(建 fixture / 讀回副作用), 失敗即拋
+//系統管理者直呼(建 fixture / 讀回副作用), 失敗即拋
 async function ad(func, args = []) {
     let r = await callRpc(func, args, TK.ADMIN)
     assert.strictEqual(r.state, 'success', `fixture ${func} 應成功, 實得 ${JSON.stringify(r)}`)
@@ -172,7 +172,7 @@ op({
 let verifyChannels = (r, c) => {
     let ids = r.msg.map((x) => x.id)
     if (ADMIN_CLASS.includes(c)) {
-        assert.ok(ids.includes(CH.A) && ids.includes(CH.B), `管理員應見全部頻道, 實得 ${ids.length} 筆`)
+        assert.ok(ids.includes(CH.A) && ids.includes(CH.B), `系統管理者應見全部頻道, 實得 ${ids.length} 筆`)
     }
     else if (MEMBER_CLASS.includes(c)) {
         assert.ok(ids.includes(CH.A) && !ids.includes(CH.B), '成員只見自己所屬之頻道 A, 不得見 B')
@@ -203,7 +203,7 @@ op({
     http: async () => ({ method: 'GET', path: '/api/getStats', query: {} }),
     verify: (r, c) => {
         if (ADMIN_CLASS.includes(c)) {
-            assert.ok(r.msg.channels >= 2, '管理員之統計含全部頻道')
+            assert.ok(r.msg.channels >= 2, '系統管理者之統計含全部頻道')
         }
         else if (MEMBER_CLASS.includes(c)) {
             assert.strictEqual(r.msg.channels, 1, '成員之統計只計所屬之頻道')
@@ -243,7 +243,7 @@ for (let tab of ['channels', 'channelMembers']) {
     })
 }
 
-//── 管理類: 限系統管理員 ──
+//── 管理類: 限系統管理者 ──
 op({
     name: 'saveChannel',
     cls: 'admin',
@@ -325,7 +325,7 @@ op({
     want: (a) => !a,
 })
 
-//── 頻道內容: 限系統管理員或該頻道成員 ──
+//── 頻道內容: 限系統管理者或該頻道成員 ──
 variants('getChannelMembers', (v) => ({
     cls: `ch${v}`,
     rpc: async () => ({ func: 'getChannelMembers', args: [CH[v]] }),
@@ -395,7 +395,7 @@ variants('resetTask', (v) => ({
     want: (a) => a ? 'pending' : 'running',
 }))
 
-//── 檔案: 限系統管理員或任一頻道成員 ──
+//── 檔案: 限系統管理者或任一頻道成員 ──
 let FILE_ID = ''
 op({
     name: 'uploadFile',
@@ -433,7 +433,7 @@ variants('ackChannel', (v) => ({
         let agent = ms.find((x) => x.memberId === AGENT_ID)
         return { self: self ? self.lastSeenMessageId : null, agent: agent ? agent.lastSeenMessageId : null }
     },
-    want: (a) => ({ self: a ? 'zzzzzzzz-matrix-cursor' : null, agent: '' }), // 允許者: 成員寫自己既有列 / 管理員補建列; 拒絕者無列; 主責 agent 之列不被動到
+    want: (a) => ({ self: a ? 'zzzzzzzz-matrix-cursor' : null, agent: '' }), // 允許者: 成員寫自己既有列 / 系統管理者補建列; 拒絕者無列; 主責 agent 之列不被動到
 }))
 
 
@@ -488,7 +488,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
     })
 
     after(async function() {
-        //清理: 本檔建立之頻道(含修前紅燈時一般使用者建立者)一律以系統管理員刪除; 刪後回驗
+        //清理: 本檔建立之頻道(含修前紅燈時一般使用者建立者)一律以系統管理者刪除; 刪後回驗
         let cs = await ad('getChannelsList', [])
         let mine = cs.filter((x) => x.name.startsWith(PREFIX))
         if (mine.length > 0) {
@@ -586,7 +586,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
         assert.ok('error' in o2, `空 __sysToken__ 之輪詢應被拒, 實得 ${JSON.stringify(o2)}`)
         let o3 = await poll(TK.ADMIN, { clientId: `${PREFIX}-poll-anon-3`, __sysToken__: 'bad-token' })
         assert.ok('error' in o3, `無效 __sysToken__ 之輪詢應被拒, 實得 ${JSON.stringify(o3)}`)
-        //clientId 與身分綁定(框架保證, 本套件之設定下實測; 外審 sol#10): 同一 clientId 先以成員身分輪詢, 其後以他人身分(管理員)重用即被拒, 不得取走他人之廣播
+        //clientId 與身分綁定(框架保證, 本套件之設定下實測; 外審 sol#10): 同一 clientId 先以成員身分輪詢, 其後以他人身分(系統管理者)重用即被拒, 不得取走他人之廣播
         let shared = `${PREFIX}-poll-shared`
         let o4 = await poll(TK.U_MEMBER, { clientId: shared, __sysToken__: TK.U_MEMBER })
         assert.ok(o4 && o4.success && !('error' in o4), `成員之輪詢應放行, 實得 ${JSON.stringify(o4)}`)
@@ -597,7 +597,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
     })
 
 
-    it('通訊路由 ulctr / slc / dwgfn / dwgf / dw: 本套件未註冊監聽——無 token 連線閘即拒, 有 token(含管理員)亦不受理', async function() {
+    it('通訊路由 ulctr / slc / dwgfn / dwgf / dw: 本套件未註冊監聽——無 token 連線閘即拒, 有 token(含系統管理者)亦不受理', async function() {
         //各路由之「合法」請求(通過框架之參數檢核, 才分得出「未註冊監聽」與「輸入不合法」): ulctr 為 JSON { mode, fileHash }, slc 為標頭 chunk-index / chunk-total / package-id + 切片本體,
         //dwgfn / dw 為 JSON { fileId }, dwgf 為 GET ?fileId=(瀏覽器下載管理器路徑, token 走 query)
         let json = { 'Content-Type': 'application/json' }
@@ -619,7 +619,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
                 })
                 let text = Buffer.from(await res.arrayBuffer()).toString('utf8')
                 let info = `${route}/${c} status=${res.status} return-type=${res.headers.get('return-type')} body=${text.slice(0, 100)}`
-                //無 token: 連線閘即拒(permission denied; dwgf 以 403); 有 token(含管理員): 本套件未註冊該事件之監聽 → 框架立即回「no listener for event[…]」之錯誤封包(w-converhp 契約;
+                //無 token: 連線閘即拒(permission denied; dwgf 以 403); 有 token(含系統管理者): 本套件未註冊該事件之監聽 → 框架立即回「no listener for event[…]」之錯誤封包(w-converhp 契約;
                 //dwgf 為瀏覽器下載管理器路徑,以非 2xx 狀態碼表達), 不是「已受理但輸入不合法」(外審 opus#14 / sol#11)
                 if (c === 'NONE') {
                     assert.ok(/permission denied/i.test(text) || res.status === 403, `應被連線閘拒, 實得 ${info}`)
@@ -642,7 +642,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
     //── C3: 執行身分(getUserIdByToken, 即資料通道本體 __sysToken__)須與連線閘同等完整 ──
     describe('C3 執行身分完整驗證(標頭 token 與本體 __sysToken__ 各自完整驗證)', function() {
 
-        it('C3-01 標頭 token 為管理員、本體 __sysToken__ 為被部署方 verifyClientUser 拒絕者(id-for-nonadmin) → 函數不執行', async function() {
+        it('C3-01 標頭 token 為系統管理者、本體 __sysToken__ 為被部署方 verifyClientUser 拒絕者(id-for-nonadmin) → 函數不執行', async function() {
             let snap = snapshotLogs()
             let r = await postMain(TK.ADMIN, '{token-for-nonadmin}', 'getWebInfor', [])
             let out = outputOf(r)
@@ -663,14 +663,14 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
             assert.ok(!text.includes('SYNTH-VERIFY-SECRET-FOR-TEST') && !text.includes('token-for-verify-throw') && !text.includes('no-such-token-xyz'), 'srLog 不得含權杖或上游原文')
         })
 
-        it('C3-03 身分取自本體 token: 標頭為管理員、本體為一般使用者 → 以一般使用者身分執行並受角色檢查(管理類被拒、不因標頭為管理員而放行)', async function() {
+        it('C3-03 身分取自本體 token: 標頭為系統管理者、本體為一般使用者 → 以一般使用者身分執行並受角色檢查(管理類被拒、不因標頭為系統管理者而放行)', async function() {
             let name = nm('c3')
             let r = await postMain(TK.ADMIN, TK.U_OUT, 'saveChannel', [{ name }])
             assert.deepStrictEqual(outputOf(r), { state: 'error', msg: 'errUserNotAdmin' }, `實得 ${r.text}`)
             assert.strictEqual(await channelByName(name), 0, '被拒者零寫入')
         })
 
-        it('C3-04 身分取自本體 token: 標頭為一般使用者、本體為管理員 → 以管理員身分執行(兩個 token 各經完整驗證, 框架不比對兩者)', async function() {
+        it('C3-04 身分取自本體 token: 標頭為一般使用者、本體為系統管理者 → 以系統管理者身分執行(兩個 token 各經完整驗證, 框架不比對兩者)', async function() {
             let name = nm('c3b')
             let r = await postMain(TK.U_OUT, TK.ADMIN, 'saveChannel', [{ name }])
             assert.strictEqual(outputOf(r) && outputOf(r).state, 'success', `實得 ${r.text}`)
@@ -724,7 +724,7 @@ describe('api-callerMatrix(呼叫者存取矩陣: 入口 × 呼叫者; C3 / C2 /
             }
         })
 
-        it('C3-08 部署方鉤子改寫傳入之使用者物件(把 id / isAdmin 改成管理員)不影響角色與身分: 資料通道與 HTTP 皆以驗證當下之原物件為準', async function() {
+        it('C3-08 部署方鉤子改寫傳入之使用者物件(把 id / isAdmin 改成系統管理者)不影響角色與身分: 資料通道與 HTTP 皆以驗證當下之原物件為準', async function() {
             //外審 opus#6 / sol#2: 鉤子只能再收緊、不能放寬; 部署方 srv.mjs 之 id-for-hookmut 於 verifyClientUser / verifyAppUser 內嘗試改寫傳入之物件後放行
             let tk = '{token-for-hookmut}'
             let name = nm('hookmut')

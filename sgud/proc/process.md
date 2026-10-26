@@ -51,7 +51,7 @@
 
 - **關聯**: `server/access.mjs`(`createAccess` 原語、`createGuardedFuncs` 入口函數表)、`server/WWebTask.mjs`(`authToken`、`kp`、`operOrm`、HTTP 路由、`sysFuncsPublic`)、`test/api-callerMatrix.test.mjs`、`test/unit-access.test.mjs`、rulebook_security R-AUTHZ-01～10、`spec/設計要點與取捨.md` D20。
 - **判斷**: 凡新增或改動「對外入口」(資料通道 `kpFunExt`、表 select、HTTP 路由、系統函數)皆適用。授權只在入口函數表套用一次, procCore 不做授權、不得在 WWebTask 內直呼 `pc.<業務函數>(`(`grep -nE "\bpc\.[a-zA-Z]+\(" server/WWebTask.mjs` 應只剩 `pc.archiveSweep`)。
-- **處理**: ①先決定規則分類(`admin` / `byChannel` / `byTask` / `byParticipant` / `user`)並加於 `createGuardedFuncs`; 管理類(寫頻道 / 成員)一律限系統管理員, 頻道內容限成員或管理員, 不另建「頻道管理者」判準(`role` / `ownerId` 為後台可編欄)。②`kpFunExt` 以 `kp(name, (c, …) => gf.<名>(c, …))` 掛上(保持原參數個數), HTTP 路由以 `gf.<名>(access.callerOfUser(user), …)`。③加入 `api-callerMatrix` 之 `ops`(`api-callerMatrix`「入口全集」案與 `unit-access` A6 會在漏加時紅); 清單類入口須回「有權看之頻道」而非整表。④檢查之值須即使用之值(同一個 `channelId` / `taskId` 傳給檢查與業務函式); 非字串一律拒。⑤改完跑變異腳本(見 experience「呼叫者身分驗證」)抽驗: 拿掉該入口之規則須被測試抓到。⑥新增之測試權杖放 `srv.mjs` 並受 `NODE_ENV !== 'production'` 守門。
+- **處理**: ①先決定規則分類(`admin` / `byChannel` / `byTask` / `byParticipant` / `user`)並加於 `createGuardedFuncs`; 管理類(寫頻道 / 成員)一律限系統管理者, 頻道內容限成員或系統管理者, 不另建「頻道管理者」判準(`role` / `ownerId` 為後台可編欄)。②`kpFunExt` 以 `kp(name, (c, …) => gf.<名>(c, …))` 掛上(保持原參數個數), HTTP 路由以 `gf.<名>(access.callerOfUser(user), …)`。③加入 `api-callerMatrix` 之 `ops`(`api-callerMatrix`「入口全集」案與 `unit-access` A6 會在漏加時紅); 清單類入口須回「有權看之頻道」而非整表。④檢查之值須即使用之值(同一個 `channelId` / `taskId` 傳給檢查與業務函式); 非字串一律拒。⑤改完跑變異腳本(見 experience「呼叫者身分驗證」)抽驗: 拿掉該入口之規則須被測試抓到。⑥新增之測試權杖放 `srv.mjs` 並受 `NODE_ENV !== 'production'` 守門。
 - **注意**: 修改 `server/access.mjs` / `server/WWebTask.mjs` 時不要同時跑變異腳本(會被還原覆蓋); e2e 進行中不改 `server/` 與 `src/`(後端重起與 dev server 重編會使案例失敗)。
 
 ## 語系注入

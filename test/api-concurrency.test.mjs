@@ -86,7 +86,7 @@ describe('api-concurrency（多人同時編輯之清單級 API 契約, 原則 10
         assert.ok(a.id)
     })
 
-    it('V1 / V12: 兩位管理員以同一基準 —— A 存後 B 之整份清單 (含多列修改) 被整次拒收 saveStale, 零寫入', async function() {
+    it('V1 / V12: 兩位系統管理者以同一基準 —— A 存後 B 之整份清單 (含多列修改) 被整次拒收 saveStale, 零寫入', async function() {
         let A = await loadAllChannels()
         let B = await loadAllChannels()
         let own = (rows) => rows.map((r, i) => [r, i]).filter(([r]) => String(r.name).startsWith(PREFIX)).map(([, i]) => i)

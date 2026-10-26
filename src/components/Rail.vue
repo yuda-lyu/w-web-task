@@ -166,7 +166,7 @@ export default {
     },
     watch: {
 
-        //明確為非管理員而區段停在後台 (如使用者資料晚於畫面取得) 時改回頻道區 (便利性, 後端為權威; 見 src/plugins/mAccess.mjs)
+        //明確為非系統管理者而區段停在後台 (如使用者資料晚於畫面取得) 時改回頻道區 (便利性, 後端為權威; 見 src/plugins/mAccess.mjs)
         canManageSelf: {
             immediate: true,
             handler: function(v) {
@@ -221,7 +221,7 @@ export default {
             return c.toUpperCase()
         },
 
-        //canManage: 明確為非管理員者隱藏後台入口 (便利性; 管理類函數由後端限系統管理員, 見 src/plugins/mAccess.mjs)
+        //canManage: 明確為非系統管理者時隱藏後台入口 (便利性; 管理類函數由後端限系統管理者, 見 src/plugins/mAccess.mjs)
         navItems: function() {
             let vo = this
             let items = [

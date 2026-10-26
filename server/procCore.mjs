@@ -681,7 +681,7 @@ function procCore(deps = {}) {
 
     //saveMembersCore: 成員清單存檔之共用核心 (範圍＝該頻道有效成員; 契約由工廠 getMembersContract(channelId) 取得). 規則同 saveChannelsCore, 另:
     //每列 channelId 須等於參數 (否則 errMemberChannelMismatch); 新列 channelId 取參數; 頻道須存在 (否則 errChannelNotFound, 不對已刪頻道新增成員);
-    //(channelId, memberId) 唯一以「寫入後之結果」驗證 (允許管理員於同一次存檔刪掉既有重複者; 否則 errMemberDuplicate; 修 O4/Q5);
+    //(channelId, memberId) 唯一以「寫入後之結果」驗證 (允許系統管理者於同一次存檔刪掉既有重複者; 否則 errMemberDuplicate; 修 O4/Q5);
     //修改只寫 memberId / memberType / role 與稽核欄 (合併寫入, 不整列覆寫): lastSeenMessageId 為 ackChannel 專有 (修 E3), ack 於存檔期間推進之游標不被回寫.
     let saveMembersCore = async (userId, channelId, rows, baseline) => {
 
@@ -1293,8 +1293,8 @@ function procCore(deps = {}) {
     //ackChannel: 推進呼叫者 (agent) 在該頻道之已讀游標. 缺列者 upsert. 兩段式鎖 (修 O3):
     //第一段更新路徑 (熱路徑, agent 輪詢頻繁): 只取實體鎖 channelMember:<c>:<u>, 以 autoInsert:false 只改不增 (列已被後台刪除 → 未命中, 不復活殘缺列), 只寫 lastSeenMessageId 與稽核欄 (與清單存檔寫入之欄位不重疊, lmdb 單列合併寫入原子);
     //第二段缺列路徑: 先釋放實體鎖再取表鎖 (避免實體鎖 → 表鎖倒置), 鎖內檢查頻道仍存在、重查 (他人剛建者改更新游標, 不新增重複列), 仍缺才 insert.
-    //allowInsert: 缺列時是否可建列 (預設 true = 修前行為, 供 unit 與管理員); 入口邊界 (access.mjs) 對一般使用者傳 false:
-    //一般使用者之成員資格已於授權檢查通過 (列存在), 若其後該列被管理員移除, 第一段查無列, 此時**不得**重新建列 (否則被移除者藉競態自我加回, 外審 opus#1), 回 errChannelNotMember.
+    //allowInsert: 缺列時是否可建列 (預設 true = 修前行為, 供 unit 與系統管理者); 入口邊界 (access.mjs) 對一般使用者傳 false:
+    //一般使用者之成員資格已於授權檢查通過 (列存在), 若其後該列被系統管理者移除, 第一段查無列, 此時**不得**重新建列 (否則被移除者藉競態自我加回, 外審 opus#1), 回 errChannelNotMember.
     let ackChannel = async (userId, channelId, lastMessageId, allowInsert = true) => {
 
         //check
@@ -1522,7 +1522,7 @@ function procCore(deps = {}) {
                     chkWrite(await woItems.tasks.del({ id: t.id }), 'tasks.del')
                 }
                 catch (err) {
-                    //熱表刪除失敗: 撤回冷表複本 (否則熱表仍在、冷表又有舊終態複本, 管理員其後重置熱表任務即留下矛盾資料, 重跑掃描亦不會自行修正)
+                    //熱表刪除失敗: 撤回冷表複本 (否則熱表仍在、冷表又有舊終態複本, 系統管理者其後重置熱表任務即留下矛盾資料, 重跑掃描亦不會自行修正)
                     try {
                         chkWrite(await woItems.tasksArchive.del({ id: t.id }), 'tasksArchive.del')
                     }
