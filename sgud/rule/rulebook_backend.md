@@ -20,6 +20,18 @@
 | 傳給自有套件之 opt 一律用現行鍵名(改名類變更傳舊名不報錯、只靜默失效或僅靠相容層); 上游已移除之鍵不轉交(D17-1); 上游新增之必填鍵於升版當輪補齊並以實際啟動驗證(2026-10-14 實例: w-serv-webdata 1.1.7 起 `useDbOrm: true` 須給 `authorizeExec`, 缺則建構即拋) | `server/WWebTask.mjs` 傳 `WServHapiServer` 之 `fpTableTags: 'tableTags-web-task.json'`(2026-09-29 由舊名 `fnTableTags` 改, 原靠 w-serv-hapi 相容層生效)與 `authorizeExec`(2026-10-14); `src/main.js:43` 傳 `WServHapiClient` 之 `useShowLog` | 已套 | `git grep -n "fnTableTags\|showLog:" -- server src srv.mjs`(應為空); 升版時比對新版 JSDoc `@param [opt.xxx]`(process「自有套件升級之查核」),並以 `node srv.mjs` 實際啟動 |
 | 認證失敗入 srLog 且只記 key(`CLAUDE.md` log 記錄要點) | `server/WWebTask.mjs:981`(verifyConn 無效權杖: `event:'verifyConn', err:'errTokenNoPermission', apiType`, 不記 authorization); 通過記 info(`:988`) | 已套(2026-09-28 補無效權杖分支之 srLog, 原於 log 前即返回) | `git grep -n "event: 'verifyConn'" -- server/WWebTask.mjs` |
 
+## w-serv-orm 診斷輸出導入 srLog(D21; 2026-10-28 起)
+
+| 規則 | 站點全集 | 判準 | 盤點指令 |
+|---|---|---|---|
+| R-ORMDIAG-01 建立 `WServOrm` 時傳 `opt.funLog`, 診斷輸出只經 `genOrmFunLog(srLog)` 記 `srLog.warn({ event:'orm-diag', label, safe })`, 不寫 console(w-serv-orm ≥ 1.1.20) | 全集 3 類共 4 處呼叫(另 `unit-ormDiagLog` 自建 A / B 兩實例為被測對象): ①正式 `server/WWebTask.mjs:191`; ②測試工具 `test/tools/concEnv.mjs:45`(與 WWebTask 相同組裝)、`test/tools/memTables.mjs:107`(只取 `withTabLocks` / `guardWrite`, 記憶體表, 不產生診斷); ③開發用 `g.mOrm.mjs:15`(種子 / 工具腳本, 無 srLog) | ①已套; ②concEnv 已套、memTables 刻意不套(記憶體替身表不經 procOrm, 無診斷輸出); ③刻意不套(stdout 為開發者終端機, 沿用 w-serv-orm 預設即不含個資). 守 `api-ormDiag` OD-API-01(真實 WWebTask)、`unit-ormDiagLog` OD-S-01(接線) | `git grep -n "WServOrm(" -- . ":!node_modules" ":!dist" ":!docs" ":!sgud" ":!spec"` |
+| R-ORMDIAG-02 `detail`(第 3 引數: 主鍵、email、錯誤原文)不取用、不寫入日誌; 只寫 `label` 與 `safe` | `server/ormDiagLog.mjs`(簽名 `(label, safe)`, 第 3 引數不命名不讀) | 已套(理由見 D21 決策 2). 守 `unit-ormDiagLog` OD-U-02、OD-I-01～07(真實 w-serv-orm 以含標記之主鍵 / 錯誤原文觸發, 日誌全文不含標記)、`api-ormDiag` OD-API-01 | `git grep -n "detail" -- server/ormDiagLog.mjs`(只應出現於註解) |
+| R-ORMDIAG-03 日誌寫入失敗不得影響原流程 | `server/ormDiagLog.mjs` 之 try / catch(w-serv-orm 之 `getDiag` 另有一層) | 已套; 守 `unit-ormDiagLog` OD-U-06(warn 拋錯 / 回 rejected promise / 非函數)、OD-I-08 | — |
+| R-ORMDIAG-04 不改 w-serv-orm 之其他選項與行為: 只傳 `{ funLog }`; `procOrm` 之 resolve / reject 與未帶 `funLog` 者相同 | `server/WWebTask.mjs:191` | 已套; 守 `unit-ormDiagLog` OD-I-01～07(兩實例同一替身逐項比對拒收值) | `git grep -n "funLog" -- server` |
+| R-ORMDIAG-05 記錄有界(字串 200、項數 20、深度 3)、等級 warn、事件名 `orm-diag`; 建構時 `srLog` 缺 `warn` 即拋 `invalid srLog` | `server/ormDiagLog.mjs` 之 `clip` / `genOrmFunLog` | 已套; 守 `unit-ormDiagLog` OD-U-01、OD-U-05、OD-U-07、OD-U-08 | — |
+
+**站點事實**(2026-10-28 實測): 本套件寫入走 `woItems` 不經 `procOrm`; 資料通道只開 `select` 且 w-serv-webdata 先擋無效條件, 故正式後端實際只會見到 `channels.select catch` / `channelMembers.select catch`(資料庫讀取失敗); 寫入類診斷與 `invalid find` 為縱深(現況打不到), 由 `unit-ormDiagLog` 以真實 w-serv-orm 直接觸發. **變異驗證**(14 個, 0 存活)見 `sgud/exp/experience.md`「w-serv-orm 診斷輸出導入 srLog」.
+
 ## 自有套件設定與資料通道授權(D17; 2026-10-14 起)
 
 | 規則 | 站點全集 | 判準 | 盤點指令 |

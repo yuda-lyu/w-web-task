@@ -28,6 +28,7 @@ import createLockSave from './lockSave.mjs'
 import createAuthorizeExec from './authorizeExec.mjs'
 import { createAccess, createGuardedFuncs } from './access.mjs'
 import srLogInit from './srLog.mjs'
+import genOrmFunLog from './ormDiagLog.mjs'
 import { maskTok, maskQuery } from './maskLog.mjs'
 import { wrapInjected } from './wrapInjected.mjs'
 import ds from '../src/schema/index.mjs'
@@ -184,9 +185,10 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
 
     //WServOrm
+    //opt.funLog (w-serv-orm ≥ 1.1.20): 診斷輸出改交 srLog (只寫 label 與不含個資之 safe, 不寫 detail; spec D21), w-serv-orm 不再寫 console; 其餘選項與行為不變
     let wp = {}
     try {
-        wp = WServOrm(ds, WOrm, url, db)
+        wp = WServOrm(ds, WOrm, url, db, { funLog: genOrmFunLog(srLog) })
     }
     catch (err) {
         //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動

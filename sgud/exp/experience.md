@@ -138,6 +138,14 @@
 - **`dist/`、`docs/` 為追蹤之產物**: 其中的語系字串與 JSDoc 文字隨來源取代而同步取代(`dist` 為單行壓縮檔, 取代前後只差角色詞); 由使用者之發布流程重建時結果相同。
 - **e2e 無標準圖含此用詞**: 本次變動之 cht 語系字串皆為錯誤訊息(`anUnexpectedErrorOccurred`、`errUserNotAdmin`、`errRowsInvalid`、`saveWriteFail`), e2e 無案例觸發; `e2e-channeltask` 全跑 34 passing、既有標準圖 0 張改變、`testPending` 無新增。
 
+## w-serv-orm 診斷輸出導入 srLog(2026-10-28, task-run01; 規則見 `rulebook_backend.md` R-ORMDIAG-01～05, 決策見 `spec/設計要點與取捨.md` D21)
+
+- **先實測「站點打不打得到」, 再設計站點層測試**: 原想用 harness 後端、以資料通道 `channels.select` 帶無效條件觸發 w-serv-orm 之 `invalid find` 診斷; 實測 5 類條件(非物件字串、陣列、`$regex`、超長 id 字串、空 `$in`)皆不到 w-serv-orm —— w-serv-webdata 白名單先擋(`invalid find[notObject]` / `[badKey]` / `[badValue]`, 不呼叫 `operOrm`), srLog 無任何 orm 記錄. 本套件寫入走 `woItems` 不經 `procOrm`、資料通道只開 `select`, 故正式後端實際只會走到 `select catch`. 站點層測試改為**子行程起真實 WWebTask、WOrm 包一層使 `channels.select` 拋 Error**(`test/tools/ormDiagChild.mjs`); 縱深路徑(寫入失敗、`invalid find`)由 unit 以真實 w-serv-orm + lmdb 直接觸發. 先寫的 harness 版 api 測試修前紅是「假紅」(不論有無接線都紅), 發現後即改寫, 不以它當修前紅證據.
+- **console 與 srLog 兩邊證據要在同一行程取得**: harness 後端的 stdout 被 harness 吞掉(只做就緒偵測), 測試取不到「console 不多出輸出」的證據; 子行程擷取 stdout / stderr(未接 `funLog` 時 w-serv-orm 預設會印 `channels.select catch { errType: 'Error' }`)並讀 srLog 檔, 兩邊證據同一次呼叫取得.
+- **變異驗證**: 14 個單點變異(`tmp/task-run01/mutate.mjs`: 以 Write 寫執行器、每變異後立即還原、最後 `finally` 再還原)全數被抓到, 含 M1(不傳 `funLog` = 修前)、M2(`detail` 外洩)、M3(日誌寫入失敗不吞). 兩點教訓: ①M14(`funLog` 回傳 promise)在 OD-U-01 漏接 —— 該案以 `await spyConsole(...)` 取回傳值, `await` 會拆掉 promise; 測「回傳值型別」須直接呼叫, 由 OD-U-06 抓到; ②OD-U-05 初版「深度」斷言以 `JSON.stringify(...).length < 200` 判定, 對深度上限 3 → 30 的變異也綠(斷言空洞), 改成精確比對 `{ a: { b: '[...]' } }` 後才抓到 M11.
+- **失敗路徑要能正常呈現**: 初版 `detail` 替身之 Proxy 陷阱會拋錯, 外洩變異時 mocha 在第一個失敗後無摘要即結束(離開碼 0), 靠 quiet-run「離開碼 0 但未見測試摘要行」警告才發現; 替身陷阱改為只計數、回無害值.
+- **w-serv-orm 1.1.20 預設已不含個資, 但仍寫 console**: 只升版不足以「導入日誌」, 須自己接 `funLog`. 預設下寫入失敗之診斷: 拒收值(`failed to save data: id[...]`, 回傳契約)隨 reject 回呼叫端, 本套件之寫入走 `woItems` 時由 `procCore.runOps` 記 `err` key.
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

@@ -198,10 +198,20 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 - **同一交付的多步驟** → 一個 task, payload 用 markdown 列步驟, 在 session 內自行規劃逐步完成, 一次彙整回應.
 - **不做巢狀 multi-task** (一個 task 存多 subtask 各自 state) — 會逼 agent 維護多個 sub-state, 易亂.
 
+## 後端日誌 (srLog) 與 w-serv-orm 診斷輸出
+
+後端日誌由 `srLog` (w-syslog) 依時段輪檔寫入 `opt.logFd` (預設 `./logs`), 只記事件名、錯誤 key 與必要之識別, 不記權杖與上游原文 (見上述 Security 與 D15).
+
+- **w-serv-orm 診斷輸出導入 srLog** (`w-serv-orm` ≥ 1.1.20; `server/ormDiagLog.mjs`, 設計 `spec/設計要點與取捨.md` D21): 本套件建立 `WServOrm` 時傳入 `opt.funLog`, w-serv-orm 的診斷輸出不再寫行程標準輸出 (pm2 / 容器常收集), 改記成 `srLog.warn({ event: 'orm-diag', label, safe })`. `label` 為標籤 (含表名與操作, 如 `channels.select catch`); `safe` 為不含主鍵、資料值與錯誤原文之摘要 (失敗筆數與位置 `{ n, ks }`、錯誤類別與機器代碼 `{ errType, errCode }`、拒收原因 `{ reason }` 等). **完整細節 (`detail`: 含主鍵與錯誤原文) 不取用、不落地**; 記錄有界 (字串 200 字、項數 20、深度 3). 日誌寫入失敗不影響原流程.
+- **平時會見到什麼**: 本套件之寫入走 `woItems` 不經 `procOrm`, 資料通道只開 `select` 且 w-serv-webdata 先擋無效條件 (`invalid find[…]`, 不到 w-serv-orm), 故實際只會見到資料庫讀取失敗: `channels.select catch` / `channelMembers.select catch` (`safe` 為 `{ errType }`). 需要原文時請看資料庫端或程序的錯誤輸出; 失敗之寫入由 `runOps` 記 `err` key (`saveRolledBack` / `saveWriteFail`).
+- **升版注意**: 監控若曾比對行程標準輸出中的 w-serv-orm 診斷字樣, 改看 srLog 的 `orm-diag`. 使用 `WWebTask(...)` 入口者無須動作.
+
 ## 測試
 
 ```bash
 npx mocha test/unit-procCore.test.mjs --reporter list      # 單元 (procCore 邏輯/狀態守衛)
+npx mocha test/unit-ormDiagLog.test.mjs --reporter list    # w-serv-orm 診斷輸出導入 srLog (真實 w-serv-orm + lmdb; 不含個資)
+npx mocha test/api-ormDiag.test.mjs --reporter list        # 同上, 真實 WWebTask 子行程 (port 11308)
 npx mocha test/api-agent.test.mjs --reporter list           # API 契約 (agent HTTP 生命週期)
 npx mocha test/api-callerMatrix.test.mjs --reporter list    # 呼叫者存取矩陣 (入口 × 呼叫者 462 格; 身分驗證 / 角色 / 頻道成員)
 node test/e2e-channeltask.test.mjs --baseline               # 產製 e2e 標準圖

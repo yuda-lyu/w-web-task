@@ -2,10 +2,11 @@
 
 本檔只記**現況**(各功能做到哪裡、對應之規則帳本條目與測試檔、已知缺口與待辦、最近一次驗證或發布之版本); 過程與教訓見 `sgud/exp/experience.md`。接續工作先讀本檔。規則帳本索引見 `sgud/rule/rulebook.md`(2026-10-22 起依類型分冊)。
 
-更新: 2026-10-26(任務 task-run01〔20261026145816〕: 角色用詞統一為「系統管理者」; 前一次為 2026-10-25 task-run01〔20261025111554〕: 呼叫者身分驗證——C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊)
+更新: 2026-10-28(任務 task-run01〔20261028054319〕: w-serv-orm 診斷輸出導入 srLog〔第 154 項, D21〕; 前一次為 2026-10-26 task-run01〔20261026145816〕: 角色用詞統一為「系統管理者」; 前一次為 2026-10-25 task-run01〔20261025111554〕: 呼叫者身分驗證——C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊)
 
 ## 版本與驗證
 
+- **w-serv-orm 診斷輸出導入 srLog(2026-10-28 task-run01〔20261028054319〕, 第 154 項; 工作樹未提交)**: 相依 `w-serv-orm` `^1.1.20`(已裝 1.1.20, 未動 `package.json` 版本與相依)。建立 `WServOrm` 時傳 `opt.funLog` → `server/ormDiagLog.mjs`: 診斷輸出只記 `srLog.warn({ event:'orm-diag', label, safe })`、**不取用 `detail`**(含主鍵與錯誤原文)、不寫 console、有界、寫入失敗吞下。規則 R-ORMDIAG-01～05(`rulebook_backend.md`)、決策 D21。站點事實: 本套件寫入走 `woItems` 不經 `procOrm`、資料通道只開 `select` 且 w-serv-webdata 先擋無效條件, 正式後端實際只會見到 `select catch`。驗證(凍結碼): 全套 `npm test` **533 passing / 0 failing**(含 e2e 34 案; 新增 `unit-ormDiagLog` 17、`api-ormDiag` 4); 既有標準圖 0 張改變; 變異 14 個全數被抓到(0 存活); 修前紅(M1 = 不傳 `funLog`): 4 條紅。細節見任務報告 `task-run01-修正報告.md`; 主控於最末輪跑全套、發布。
 - 套件版本 `package.json` 記 `1.0.36`(本輪未動版本; 前一輪成果已由主控以本機檢查點提交)。本輪(task-run01, 2026-10-25)改動在工作樹, 未提交。相依: `w-serv-orm` `^1.1.17`、**`w-serv-hapi` `^1.1.8`(本輪升; 連帶 w-serv-webdata 1.1.16、w-serv-broadcast 1.1.12)**。
 - 本輪(2026-10-25 task-run01)驗證(凍結碼): `unit-*` + `api-*` 全跑 **478 passing / 0 failing**(含新增 `api-callerMatrix` 79 案〔66 列 × 7 類呼叫者 = 462 格 + 13 案〕、`unit-access` 13、`unit-mAccess` 3); e2e(`e2e-channeltask`, 改到連線與同步而擴大為全跑)**34 passing**; 真瀏覽器(一般使用者 / 非成員 / 系統管理者)驗收 16 / 16; 變異 25 個全數被抓到(0 存活); 外審 opus-5.5〔API 額度〕+ gpt-6.1-sol, 其補修已納入。既有標準圖 0 張改變。細節見任務報告 `task-run01-修正報告.md`; 主控於最末輪跑全套。
 - 用詞統一輪(2026-10-26 task-run01, 使用者裁示, 工作樹未提交): 角色用詞統一為「系統管理者」(README、`spec/`、`server/procLang.mjs` cht、JSDoc 與註解、`sgud/`、測試期望文字、`dist/`、`docs/`; 頻道層級管理角色本套件不設, 不動); 規則見 `rulebook_ui.md`。不動欄位鍵、行為、存取規則、`package.json` 版本。驗證: `unit-*` + `api-*` **478 passing / 0 failing**; `e2e-channeltask` 全檔 **34 passing**, 既有標準圖 0 張改變(無標準圖含此用詞)。
@@ -23,6 +24,7 @@
 | 圖檔 `uploadFile` / `getFile`(D10) | 已上線; 僅點陣圖白名單 inline | `rulebook_backend.md` D10 | `api-files` |
 | 資料通道只開 `select`(D17) + 連線閘 | 已上線 | `rulebook_backend.md` D17-1～3 | `api-dataChannel`、`unit-authorizeExec`、`unit-optRemoved` |
 | **呼叫者身分驗證與存取矩陣(D20, task-run01)**: 執行身分(`getUserIdByToken`)與連線閘 / 登入檢查共用 `authToken` 完整驗證(C3); 管理類限系統管理者、頻道內容 / 任務 / 檔案限成員或系統管理者、清單 / 統計 / 表 select 收斂為所屬頻道(C2 / C2b); 系統函數只公開 `[sys:getFuncList]`(第 128 項) | **已實作**(2026-10-25); 角色 ＝ token 反查 `isAdmin==='y'`(不讀 `isApp`, 不設頻道管理者); 授權只在入口函數表 `createGuardedFuncs`(`server/access.mjs`)套用一次, procCore 不變; 前端 `canManage` 對 `isAdmin==='n'` 隱藏後台入口與成員視窗編輯開關(便利, 後端為權威) | `rulebook_security.md` R-AUTHZ-01～10 | `api-callerMatrix`(462 格 + 13 案)、`unit-access`、`unit-mAccess` |
+| w-serv-orm 診斷輸出導入 srLog(D21, 第 154 項) | **已實作**(2026-10-28): `funLog` 只記 `label` 與不含個資之 `safe` 為 `srLog.warn({ event:'orm-diag' })`, 不記 `detail`、不寫 console; 正式後端平時只會見 `channels.select catch` / `channelMembers.select catch`; `g.mOrm.mjs`(開發腳本)與 `memTables`(記憶體替身)刻意不套 | `rulebook_backend.md` R-ORMDIAG-01～05 | `unit-ormDiagLog`、`api-ormDiag` |
 | 權杖外洩防護(D15) | 已上線 | `rulebook_security.md` | `api-tokenLeak`、`unit-maskLog`、`unit-wrapInjected` |
 | 按鈕雙擊防護(D16) | 已上線(前端 `runSubmit`、後端 `lockSave`; 「確保成員列」之原子化由 D18 之表鎖取代原共用 kmx key) | `rulebook_backend.md` D16; `rulebook_ui.md` | `unit-submitGuard`、`unit-lockSave`、`api-doubleclick` |
 | 前端 UI(RWD D13、i18n、彈窗) | 已上線; 後台頻道 / 成員頁新增草稿保護提示條與成員重複之警告圖示; **儲存格編輯器開啟中(已輸入未按 Enter)收到推播視同草稿**(不重建、凍結基準、提示; 編輯器關閉後依一般規則; N1 已修) | `rulebook_ui.md`; `rulebook_concurrency.md` R-CONC-09 | `unit-rwd`、`unit-draft`; e2e E2E-016 / 017 |

@@ -14,6 +14,7 @@
 | `package.json` 之 `test` 為全域 §16.5 標準字串; 本專案屬自有計畫 / 專案, 既有 `serve` / `build` / `lint` / `deploy` 照留, 測試類只有 `test` | `"test": "mocha --no-parallel \"test/*.test.mjs\" --timeout 180000"` | 已套; 無 `.mocharc` | `node -e "console.log(require('./package.json').scripts)"`; `ls .mocharc*`(應無) |
 | 單檔或子集由 agent 自行組指令 | `npx mocha test/<檔> --timeout 180000`; e2e `npx mocha test/e2e-channeltask.test.mjs --reporter list --timeout 300000`; 無逐檔隔離 runner(e2e 只有 1 檔) | 已套 | — |
 | 單 mocha 進程內各檔 hermetic | e2e 每案 `reseedBackend()`(`e2e-channeltask.test.mjs:884`; E2E-013 另 `reseedBackend({ withArchivedTask: true })`, `:825`); api 三檔 `before` 以 `startServersOnce({ backendOnly: true })` 共用 harness 開場之種子, 不逐案重置(`npm test` 檔名序 api → e2e → unit, e2e 每案重建故不受 api 殘留影響) | 已套 | `grep -n "reseedBackend(" test/e2e-channeltask.test.mjs`; `grep -n "startServersOnce(" test/api-*.test.mjs` |
+| 子行程測試之伺服器 port(2026-10-28 增補): `api-ormDiag` 以子行程 `test/tools/ormDiagChild.mjs` 起真實 WWebTask, 固定 port 11308(≥ 8000、不隨機; 與 harness 之 11108 / 8091 / 11208 及開發 3 srv 分離; 工作目錄 `test/_tmp/ormDiag/`, 測完即刪, 子行程結束即釋放埠) | `test/api-ormDiag.test.mjs` 之 `PORT` | 已套(`CLAUDE_settings.md` 為使用者持有檔, 本 port 未寫入, 見任務報告提醒) | `grep -n "PORT = " test/api-ormDiag.test.mjs` |
 | 伺服器 port ≥ 8000 且寫死, 與開發 3 srv 分離 | harness: 後端 11108(`test/tools/e2e-settings.json` 之 `serverPort`)、前端 8091(`e2e-setup.mjs:58` `FRONTEND_PORT`)、互斥 11208(`:60` `LOCK_PORT`); 開發 3 srv 見 `CLAUDE_settings.md`(11008 / 8080 / 7000) | 已套 | `grep -n "serverPort" test/tools/e2e-settings.json`; `grep -n "FRONTEND_PORT =\|LOCK_PORT =" test/tools/e2e-setup.mjs` |
 
 ## spec → 測試對照
@@ -35,6 +36,7 @@
 | D20 呼叫者身分驗證與存取矩陣(C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊; task-run01) | `api-callerMatrix`(真後端; 入口 × 傳輸 × 7 類呼叫者 462 格 + 入口全集 + 系統函數 / 輪詢 / 通訊路由 / C3 案)、`unit-access`(角色判準、登錄 fail-closed、成員判準、規則、清單收斂)、`unit-mAccess`(前端 `canManage`); 變異驗證見 `rulebook_security.md` R-AUTHZ-10 | `npx mocha test/unit-access.test.mjs test/unit-mAccess.test.mjs --timeout 60000`; api `npx mocha test/api-callerMatrix.test.mjs --timeout 180000`(須持測試鎖) |
 | D17-1 w-serv-orm 已移除之三鍵於入口拒絕、無副作用 | `unit-optRemoved`(不起伺服器、不開埠) | `npx mocha test/unit-optRemoved.test.mjs --timeout 60000` |
 | D17-2 資料通道只開 select、authorizeExec 拒絕記 srLog | `unit-authorizeExec`、`api-dataChannel` | `npx mocha test/unit-authorizeExec.test.mjs`; api 另 `npx mocha test/api-dataChannel.test.mjs --timeout 180000`(須持測試鎖) |
+| D21 w-serv-orm 診斷輸出導入 srLog(R-ORMDIAG-01～05; task-run01 2026-10-28) | `unit-ormDiagLog`(17 案: funLog 本身 8、真實 w-serv-orm + lmdb 8、站點接線 1)、`api-ormDiag`(4 案; 子行程起真實 WWebTask + 真實 srLog 檔 + console 擷取) | `npx mocha test/unit-ormDiagLog.test.mjs --timeout 60000`; api 另 `npx mocha test/api-ormDiag.test.mjs --timeout 180000`(占用 port 11308; 須持測試鎖) |
 | D17-3 資料通道連線閘套用 verifyClientUser | `api-dataChannel`(非系統管理者被拒)、`api-tokenLeak` E7(verifyClientUser 拋錯) | `npx mocha test/api-dataChannel.test.mjs test/api-tokenLeak.test.mjs --timeout 180000`(須持測試鎖) |
 
 ## e2e 落地映射(對應全域技能[role-coder-for-test-e2e] §3 契約)

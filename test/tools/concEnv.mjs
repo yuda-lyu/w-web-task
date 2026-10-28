@@ -13,33 +13,37 @@ import channelsContract from '../../src/schema/contracts/channels.mjs'
 import getMembersContract from '../../src/schema/contracts/channelMembers.mjs'
 import procCore from '../../server/procCore.mjs'
 import createLockSave from '../../server/lockSave.mjs'
+import genOrmFunLog from '../../server/ormDiagLog.mjs'
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..', '_tmp', 'concurrency')
 
 
-//mkEnv: 建立一個獨立資料庫之環境. 回 { pc, woItems, wp, kmx, logs, infos, close }; logs 收 srLog.error 之記錄 (供斷言補償失敗有記 log), infos 收 srLog.info 之記錄 (供斷言審計 log)
+//mkEnv: 建立一個獨立資料庫之環境. 回 { pc, woItems, wp, kmx, logs, infos, warns, close }; logs 收 srLog.error 之記錄 (供斷言補償失敗有記 log), infos 收 srLog.info 之記錄 (供斷言審計 log), warns 收 srLog.warn 之記錄 (含 w-serv-orm 診斷輸出 orm-diag)
 async function mkEnv(name) {
     let dir = path.join(ROOT, name)
     fs.rmSync(dir, { recursive: true, force: true })
     fs.mkdirSync(dir, { recursive: true })
 
-    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db); useCache 未給(false)
-    let wp = WServOrm(ds, WOrm, dir, 'worm')
-    let { woItems, withTabLocks, guardWrite } = wp
-
     let logs = []
     let infos = []
+    let warns = []
     let srLog = {
         info(o) {
             infos.push(o)
         },
-        warn() {},
+        warn(o) {
+            warns.push(o)
+        },
         error(o) {
             logs.push(o)
         }
     }
+
+    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db, { funLog: genOrmFunLog(srLog) }); useCache 未給(false)
+    let wp = WServOrm(ds, WOrm, dir, 'worm', { funLog: genOrmFunLog(srLog) })
+    let { woItems, withTabLocks, guardWrite } = wp
     let kmx = pmKeyMutex()
     let cst = cacheSt()
     let lockSave = createLockSave(cst)
@@ -50,7 +54,7 @@ async function mkEnv(name) {
         await wp.closeAll()
         fs.rmSync(dir, { recursive: true, force: true })
     }
-    return { pc, woItems, wp, kmx, logs, infos, close, dir }
+    return { pc, woItems, wp, kmx, logs, infos, warns, close, dir }
 }
 
 
