@@ -1,6 +1,7 @@
 import fs from 'fs'
 import map from 'lodash-es/map.js'
 import { pathToFileURL } from 'url'
+import getDiagBriefErr from 'wsemi/src/getDiagBriefErr.mjs'
 import ds from './src/schema/index.mjs'
 import { woItems } from './g.mOrm.mjs'
 
@@ -276,7 +277,7 @@ async function initialData() {
         fs.mkdirSync(dbfDir, { recursive: true })
     }
     catch (err) {
-        console.log('clear dbf warn', err.message)
+        console.log('clear dbf warn', getDiagBriefErr(err)) //只印錯誤類別與白名單代碼之摘要, 不印 err.message (含路徑與資料值; spec D22)
     }
 
     console.log('finish.')
@@ -290,7 +291,7 @@ export { baseChannelsRaw, baseMembersRaw, baseMessagesRaw, baseTasksRaw, buildBa
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     initialData()
         .catch((err) => {
-            console.log('initialData catch', err)
+            console.log('initialData catch', getDiagBriefErr(err)) //只印錯誤類別與白名單代碼之摘要, 不印錯誤物件 (spec D22)
         })
 }
 

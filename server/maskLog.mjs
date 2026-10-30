@@ -5,6 +5,7 @@ import isobj from 'wsemi/src/isobj.mjs'
 
 //maskLog: 寫 console / srLog 前之權杖遮罩 (M 契約; 與 w-web-sso server/srLog.mjs 之 maskToken、w-web-perm / w-web-api 之 maskLog 同一組測資,
 //見 test/unit-maskLog.test.mjs 與 spec/設計要點與取捨.md D15). 印權杖一律經本檔, 不另寫第二份遮罩.
+//另提供 describeKeys / describeType (console 診斷只印鍵名、型別或固定詞彙, 不印使用者物件、請求本體、傳入值; dspec〈診斷輸出與遮罩〉D2, spec D22; 測試見 test/unit-consoleSites.test.mjs).
 
 
 //safeChars: 露出之字元中, 控制字元 \u0000-\u001f 與 \u007f 一律換成 '?' (防 log 注入: 權杖夾換行即可偽造 log 行)
@@ -73,6 +74,70 @@ let maskQuery = (q) => {
 
 
 /**
+ * 型別描述 (D2 預設不輸出資料值): 只回固定詞彙 '(typeof 名稱)', 名稱為 typeof 之結果, null 與陣列另列為 'null'、'array'; 絕不輸出值
+ *
+ * 永不拋錯 (已撤銷之 Proxy 等回 '(typeof unknown)').
+ *
+ * @param {*} v 輸入任意值 (例如無效之建構參數、無效之請求本體)
+ * @returns {String} 回傳型別描述字串
+ * @example
+ * describeType('abc') // => '(typeof string)'
+ * describeType(['abc']) // => '(typeof array)'
+ * describeType({ a: 1 }) // => '(typeof object)'
+ */
+let describeType = (v) => {
+    try {
+        let t = v === null ? 'null' : (Array.isArray(v) ? 'array' : typeof v)
+        return `(typeof ${t})`
+    }
+    catch (err) {
+        return '(typeof unknown)'
+    }
+}
+
+
+//describeKeys 之上限: 最多列 20 個鍵, 單一鍵名最多 32 字元 (超過截斷並加 '...')
+const KEYS_MAX = 20
+const KEY_LEN_MAX = 32
+
+
+/**
+ * 鍵名描述 (D2 預設不輸出資料值): 物件只列自有可列舉之字串鍵名, 不讀值、不執行 getter; 鍵名中之控制字元換成 '?' (防 log 注入), 有界
+ *
+ * - 物件: '(keys: 鍵1,鍵2,…)'; 鍵名超過 32 字元截斷並加 '...'; 超過 20 個鍵只列前 20 個並以 ',...+N' 註記其餘個數; 無鍵為 '(no keys)'
+ * - null、陣列與非物件: 同 describeType
+ * - 永不拋錯 (取鍵名失敗, 如會拋錯之 Proxy, 回 describeType 之結果)
+ * - 鍵名視為結構而非資料值; 惟鍵名可能取自使用端 (如請求之查詢參數名), 故有界且去控制字元
+ *
+ * @param {*} v 輸入任意值 (例如使用者物件、請求之查詢參數物件, null-prototype 物件亦可)
+ * @returns {String} 回傳鍵名描述字串
+ * @example
+ * describeKeys({ id: 'u1', name: 'n' }) // => '(keys: id,name)'
+ * describeKeys({}) // => '(no keys)'
+ * describeKeys('abc') // => '(typeof string)'
+ */
+let describeKeys = (v) => {
+    try {
+        if (v === null || typeof v !== 'object' || Array.isArray(v)) {
+            return describeType(v)
+        }
+        let ks = Object.keys(v)
+        if (ks.length === 0) {
+            return '(no keys)'
+        }
+        let shown = ks.slice(0, KEYS_MAX).map((k) => {
+            return k.length > KEY_LEN_MAX ? `${safeChars(k.slice(0, KEY_LEN_MAX))}...` : safeChars(k)
+        })
+        let more = ks.length - shown.length
+        return `(keys: ${shown.join(',')}${more > 0 ? `,...+${more}` : ''})`
+    }
+    catch (err) {
+        return describeType(v)
+    }
+}
+
+
+/**
  * 遮罩網址: http(s) 只留 origin + pathname (捨棄 query、fragment、userinfo); 語意同 M 契約之來源實作 w-web-sso src/maskUrl.mjs
  *
  * - 陣列 → 逐元素 maskUrl
@@ -107,4 +172,4 @@ let maskUrl = (u) => {
 }
 
 
-export { maskTok, maskQuery, maskUrl }
+export { maskTok, maskQuery, maskUrl, describeKeys, describeType }

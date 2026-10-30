@@ -29,7 +29,7 @@
 <nav >
     
     
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createAuthorizeExec">createAuthorizeExec</a></li><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#genDiag">genDiag</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createAuthorizeExec">createAuthorizeExec</a></li><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeKeys">describeKeys</a></li><li><a href="global.html#describeType">describeType</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#genDiag">genDiag</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
     
 </nav>
 
@@ -556,6 +556,343 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 
     
 
+    <h4 class="name" id="describeKeys"><span class="type-signature"></span>describeKeys<span class="signature">(v)</span><span class="type-signature"> &rarr; {String}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>鍵名描述 (D2 預設不輸出資料值): 物件只列自有可列舉之字串鍵名, 不讀值、不執行 getter; 鍵名中之控制字元換成 '?' (防 log 注入), 有界</p>
+<ul>
+<li>物件: '(keys: 鍵1,鍵2,…)'; 鍵名超過 32 字元截斷並加 '...'; 超過 20 個鍵只列前 20 個並以 ',...+N' 註記其餘個數; 無鍵為 '(no keys)'</li>
+<li>null、陣列與非物件: 同 describeType</li>
+<li>永不拋錯 (取鍵名失敗, 如會拋錯之 Proxy, 回 describeType 之結果)</li>
+<li>鍵名視為結構而非資料值; 惟鍵名可能取自使用端 (如請求之查詢參數名), 故有界且去控制字元</li>
+</ul></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line119">line 119</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>describeKeys({ id: 'u1', name: 'n' }) // => '(keys: id,name)'
+describeKeys({}) // => '(no keys)'
+describeKeys('abc') // => '(typeof string)'</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>v</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">*</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入任意值 (例如使用者物件、請求之查詢參數物件, null-prototype 物件亦可)</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳鍵名描述字串</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">String</span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
+
+        
+            
+
+    
+
+    <h4 class="name" id="describeType"><span class="type-signature"></span>describeType<span class="signature">(v)</span><span class="type-signature"> &rarr; {String}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>型別描述 (D2 預設不輸出資料值): 只回固定詞彙 '(typeof 名稱)', 名稱為 typeof 之結果, null 與陣列另列為 'null'、'array'; 絕不輸出值</p>
+<p>永不拋錯 (已撤銷之 Proxy 等回 '(typeof unknown)').</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line88">line 88</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>describeType('abc') // => '(typeof string)'
+describeType(['abc']) // => '(typeof array)'
+describeType({ a: 1 }) // => '(typeof object)'</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>v</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">*</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入任意值 (例如無效之建構參數、無效之請求本體)</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳型別描述字串</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">String</span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
+
+        
+            
+
+    
+
     <h4 class="name" id="describeUpstream"><span class="type-signature"></span>describeUpstream<span class="signature">(err)</span><span class="type-signature"> &rarr; {Object}</span></h4>
 
     
@@ -897,7 +1234,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line61">line 61</a>
+        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line62">line 62</a>
     </li></ul></dd>
     
 
@@ -1067,7 +1404,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line34">line 34</a>
+        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line35">line 35</a>
     </li></ul></dd>
     
 
@@ -1241,7 +1578,7 @@ maskTok(['abcdefghijklmnop', 'x']) // => ['ab...op(len=16)', '(len=1)']</code></
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line86">line 86</a>
+        <a href="server_maskLog.mjs.html">server/maskLog.mjs</a>, <a href="server_maskLog.mjs.html#line151">line 151</a>
     </li></ul></dd>
     
 
@@ -1845,7 +2182,7 @@ opt.hold 為函數, 輸入流程結果, 回傳 true 時保持占位與按鈕鎖(
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Fri Oct 30 2026 19:49:45 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Sat Oct 31 2026 03:43:03 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>

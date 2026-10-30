@@ -105,6 +105,17 @@
 - **`getDiagSecrets({ conns })` 與舊 `getUrlSecrets` 等價**: 舊函數已隨 w-serv-orm 1.1.23 刪除, 無法直接對照; OM-F-06 以測試端明列的規則(含 `://` 或 `@` 列網址, 其餘列路徑)對 8 種位址(連線字串含帳密、無帳密、僅 `@`、相對路徑、`D:/`、反斜線、絕對路徑、含空白)逐字比對 `genDiag(url)` 與依規則明列 `urls`／`paths` 者的 `mask`／`err` 結果。
 - **變異在原檔進行, 由 `quiet-run --lock` 包住一次取鎖**(`tmp/b-task/mutate.mjs`): 腳本先備份原檔與 sha256, 每個變異「還原 → 套用(恰一處命中才套) → 跑 mocha → 還原」, `finally` 與 `process.on('exit')` 皆還原並回驗 sha256; 與 mig-task3 之副本法不同(本輪被測僅 2 個小檔之文字)。`PRE` 變異以 `git show HEAD:<檔>` 取修前內容(唯讀)。修前還原在新相依下連 `genDiag.mjs` 都載入失敗(`getUrlSecrets` 已刪), 所以逐項證明「safeKeys 缺」須用 M01 而不是 `PRE`。
 
+## console 診斷輸出不印資料值(2026-10-31, task〔20261031023204〕, 排程第 191、165 項; 規則見 `rulebook_security.md` R-CONSOLE-01～03, 決策見 `spec/設計要點與取捨.md` D22)
+
+- **站點判定看「值從哪來」, 不看「經過什麼函數」**: `pickUser`(只丟欄位、id / name / email 仍是個資)、`maskTok(payload)`(對請求本體仍露頭尾各最多 4 字元, 片段即資料值)、`maskQuery`(只遮 token 鍵, 其餘鍵之值原樣)在前一輪皆被當成「已處理」, 因為當時只問「是否印出權杖」; D2 要問的是「是否印出資料值」. 盤點時對每站寫「值之來源」(傳入參數／請求／使用者物件／後端回傳／固定詞彙), 不以經過遮罩或投影函數為合規理由.
+- **斷言要含「片段」**: 只斷言全值不在, 抓不到 `maskTok` 頭尾字元外露; 測資識別值取有可辨頭尾者(`ZZ-secret-9317` → `ZZ-s`、`9317`), 非權杖類站點斷言全值與片段皆不出現; 權杖類站點(`maskTok` 照舊)只斷言全值不在並斷言遮罩形態存在(防「為了過測試把 maskTok 拿掉」).
+- **AST 守結構、動態守內容, 兩者互補**: AST 只看被呼叫者名稱, 放行函數(如 `briefSsoErr`)內部若改帶回應本文抓不到(變異 V04 只有 CL-B-02 抓到); 反之還原 `maskTok(payload)`／拿掉 `maskTok` 之變異(W15)AST 放行, 只有動態抓到. 站點數鎖在登錄表(`EXPECT_COUNT`), 新增站點即失敗, 逼人先歸類.
+- **text/plain 請求本體交給 handler 前之型別**: 非 JSON 字串 → `j2o` 回 `{}`(物件型別、空物件不過 `iseobj`); JSON 字串字面值 → 字串(最易漏, 修前 `maskTok` 露頭尾); JSON 陣列 → 陣列. 無效本體測資三種都要.
+- **無法由外部穩定觸發之錯誤站點用「副本 + 最小置換」**: `g.initialData.mjs`(資料庫於模組載入時即失敗而不進 catch)與 `srv.mjs`(設定硬寫於 `g.getSettings.mjs`)——測試複製原始檔, 只置換 import 與測資注入點, 每個錨點要求恰命中一處(來源變動即明確失敗, 不靜默略過). fs 錯誤含路徑: 以含 NUL 字元之路徑(內含識別值)令 `fs.mkdirSync` 拋 `ERR_INVALID_ARG_VALUE`, 其訊息內含該路徑, 模擬「後端錯誤原文夾帶資料值」.
+- **w-serv-orm 對初始化錯誤只遮帳密, 不遮資料值**: 修前 `WServOrm init failed` 實測輸出 `postgres://***@db.example.com…password=***`, 識別值仍在原文. 遮罩(dspec D3, 對外錯誤值)與 console 不輸出原文(D2)是兩件事, 不以「上游已遮」省略.
+- **`espree` 為 eslint 之直接相依**: `test/tools/consoleSites.mjs` 以之掃 AST; 本套件 `package.json` 只明列 eslint(devDependencies), 若日後 eslint 升版改相依, 該 import 須同步.
+- **變異在副本進行**(`tmp/task/mutate.mjs`, 已清): 每個變異 `fs.cpSync` 複製 `server/`、`src/schema`、`toolg`、四個根檔與四個測試檔(約 0.1 秒), mocha 以 `spawnSync` 之 `cwd` 選項在副本跑(不用 `cd`), 每批以一次 `quiet-run --lock` 包住; 每變異約 10 秒, 39 個變異加對照分兩批. **`quiet-run --lock` 之排鎖等待計入前景指令之 10 分鐘上限與 `--timeout`**: 第二批於他套件佔滿兩槽時排了約 11 分鐘, 被工具移到背景; 長批次改 `run_in_background` 並以 Monitor 等待.
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

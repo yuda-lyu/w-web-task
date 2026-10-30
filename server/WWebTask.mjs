@@ -20,6 +20,7 @@ import fsIsFolder from 'wsemi/src/fsIsFolder.mjs'
 import fsIsFile from 'wsemi/src/fsIsFile.mjs'
 import replace from 'wsemi/src/replace.mjs'
 import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
+import getDiagBriefErr from 'wsemi/src/getDiagBriefErr.mjs'
 import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
 import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
@@ -31,7 +32,7 @@ import createAuthorizeExec from './authorizeExec.mjs'
 import { createAccess, createGuardedFuncs } from './access.mjs'
 import srLogInit from './srLog.mjs'
 import genDiag from './genDiag.mjs'
-import { maskTok, maskQuery } from './maskLog.mjs'
+import { maskTok, describeKeys, describeType } from './maskLog.mjs'
 import { wrapInjected } from './wrapInjected.mjs'
 import ds from '../src/schema/index.mjs'
 
@@ -45,7 +46,7 @@ import ds from '../src/schema/index.mjs'
  * 系統管理者＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理者）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
  * 公開入口（無須token）只有前端靜態檔；/api/*與資料通道一律須token，系統函數只公開'[sys:getFuncList]'（且本套件之getUserIdByToken對空token fail-closed）。
  * 診斷輸出：w-serv-orm（≥1.1.23）之診斷經wsemi之genDiagFunLog轉寫為srLog.warn({ event: 'orm-diag', label, safe })，只寫標籤與安全摘要，不取細節（detail）、不寫console；safe之頂層鍵限w-serv-orm公開之SAFE_KEYS（轉接器傳safeKeys作第二道防線，名單外之鍵丟棄，errType、errCode恆保留）；srLog缺warn不再於建構時拋錯（寫入失敗被吞）。選項與遮罩規則見wsemi之getDiag／genDiagFunLog與w-serv-orm之說明，本套件不提供logDetail。
- * 外來值遮罩：後端驅動之例外原文（外來值）離開本套件前（回遠端之失敗msg、資料通道函數失敗之reject、寫入srLog之msg與err、封存補償後轉拋）一律經wsemi getDiag實例之diag.mask／diag.err（server/genDiag.mjs，秘密來源為url：連線字串含帳密者整串、帳密與裸密碼皆遮，檔案位置視為儲存路徑不遮；網址帳密、password=、Bearer等形態由樣式規則遮罩）；本套件自身以固定詞彙（i18n key）組成之失敗與成功回應之資料不經遮罩。
+ * 外來值遮罩：後端驅動之例外原文（外來值）離開本套件前（回遠端之失敗msg、資料通道函數失敗之reject、寫入srLog之msg與err、封存補償後轉拋）一律經wsemi getDiag實例之diag.mask／diag.err（server/genDiag.mjs，秘密來源為url：連線字串含帳密者整串、帳密與裸密碼皆遮，檔案位置視為儲存路徑不遮；網址帳密、password=、Bearer等形態由樣式規則遮罩）；本套件自身以固定詞彙（i18n key）組成之失敗與成功回應之資料不經遮罩。console輸出：後端console診斷只印固定詞彙、型別（如(typeof object)）、鍵名（如(keys: id,name)）與錯誤類別摘要（如{ errType: 'Error' }），不印使用者物件、請求本體、查詢參數值、傳入參數值與後端錯誤原文，權杖（Authorization、?token=）經maskTok遮罩，規則見spec/設計要點與取捨.md D22。
  *
  * @class
  * @param {Function} WOrm 輸入資料庫ORM函數
@@ -74,44 +75,46 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let instWServHapiServer = null
 
 
+    //參數檢核之 console 只印型別 (describeType), 不印傳入值本身: url 可為含帳密之連線字串或物件, 其餘亦可能夾帶使用端之值 (D22, dspec 診斷輸出與遮罩 D2、輸入參數之檢測機制 V20)
+
     //check WOrm
     if (!isfun(WOrm)) {
-        console.log('invalid WOrm', WOrm)
+        console.log('invalid WOrm', describeType(WOrm))
         throw new Error('invalid WOrm')
     }
 
 
     //check url
     if (!isestr(url)) {
-        console.log('invalid url', url)
+        console.log('invalid url', describeType(url))
         throw new Error('invalid url')
     }
 
 
     //check db
     if (!isestr(db)) {
-        console.log('invalid db', db)
+        console.log('invalid db', describeType(db))
         throw new Error('invalid db')
     }
 
 
     //check getUserByToken
     if (!isfun(getUserByToken)) {
-        console.log('invalid getUserByToken', getUserByToken)
+        console.log('invalid getUserByToken', describeType(getUserByToken))
         throw new Error('invalid getUserByToken')
     }
 
 
     //check verifyClientUser
     if (!isfun(verifyClientUser)) {
-        console.log('invalid verifyClientUser', verifyClientUser)
+        console.log('invalid verifyClientUser', describeType(verifyClientUser))
         throw new Error('invalid verifyClientUser')
     }
 
 
     //check verifyAppUser
     if (!isfun(verifyAppUser)) {
-        console.log('invalid verifyAppUser', verifyAppUser)
+        console.log('invalid verifyAppUser', describeType(verifyAppUser))
         throw new Error('invalid verifyAppUser')
     }
 
@@ -202,13 +205,16 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     }
     catch (err) {
         //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動
-        console.log('WServOrm init failed', err)
+        //console 只印錯誤類別與白名單代碼之摘要 (wsemi getDiagBriefErr), 不印錯誤物件: 其訊息與堆疊可含連線字串帳密與資料值 (D22)
+        console.log('WServOrm init failed', getDiagBriefErr(err))
         throw err
     }
     let { woItems, procOrm, withTabLocks, guardWrite } = wp //withTabLocks / guardWrite: 每表一把表鎖與「取鎖 → 新鮮讀取 → 基準比對 → 寫入」原子防護 (多人同時編輯, 原則 10; 同表之所有寫入者共用此實例之鎖)
 
 
-    //印權杖（console）一律經 maskLog 之 maskTok / maskQuery（M 契約，含陣列與非字串），不另寫第二份遮罩
+    //console 診斷之原則（D22；dspec 診斷輸出與遮罩 D2「預設不輸出資料值」）：只印固定詞彙、型別或鍵名（maskLog 之 describeType / describeKeys）與錯誤摘要（wsemi getDiagBriefErr），
+    //不印使用者物件、請求本體、查詢參數值、傳入參數值、後端回傳值與錯誤物件；權杖（Authorization、?token=、本體 token）一律經 maskLog 之 maskTok（M 契約，含陣列與非字串），不另寫第二份遮罩；
+    //站點全集與逐站合規由 test/unit-consoleSites（AST 掃描）與 test/api-consoleLeak（含識別值之測資觸發各站點）守
 
     //runApi: 統一 HTTP handler 收尾 — pm2resolve + isErr 還原 + 失敗記 srLog.error (與 kpFunExt 之 wrapErrLog 對稱)
     let runApi = async (event, core) => {
@@ -319,8 +325,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let gf = createGuardedFuncs({ access, pc, getWebInfor })
 
 
-    //pickUser: 使用者物件之對外 / 對 console 投影 (白名單 id / name / email / isAdmin, 前端 userSelf 只讀此四欄): 部署方 getUserByToken 回傳之物件可能夾帶其他欄位 (如密鑰、內部識別碼),
-    //登入檢查之回應與認證失敗之 console 皆只出此投影 (同 w-web-api A-2; 外審 sol#3 / opus#9)
+    //pickUser: 使用者物件之對外投影 (白名單 id / name / email / isAdmin, 前端 userSelf 只讀此四欄): 部署方 getUserByToken 回傳之物件可能夾帶其他欄位 (如密鑰、內部識別碼),
+    //登入檢查之回應只出此投影 (同 w-web-api A-2; 外審 sol#3 / opus#9). 認證失敗之 console 不再印此投影 (其欄位值為個資), 只印鍵名 (describeKeys, D22 取代原「console 印投影」之作法)
     let pickUser = (user) => {
         return {
             id: get(user, 'id', ''),
@@ -335,26 +341,26 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     let checkUser = async(user) => {
         let id = get(user, 'id', '')
         if (!isestr(id)) {
-            console.log('user', pickUser(user))
+            console.log('invalid user', describeKeys(user))
             console.log('can not get the userId')
             return Promise.reject('errUserIdMissing')
         }
         let email = get(user, 'email', '')
         if (!isestr(email)) {
-            console.log('user', pickUser(user))
+            console.log('invalid user', describeKeys(user))
             console.log('can not get the email of user')
             return Promise.reject('errUserEmailMissing')
         }
         let name = get(user, 'name', '')
         if (!isestr(name)) {
-            console.log('user', pickUser(user))
+            console.log('invalid user', describeKeys(user))
             console.log('can not get userName')
             return Promise.reject('errUserNameMissing')
         }
         let isAdmin = get(user, 'isAdmin', '')
         if (isAdmin !== 'y' && isAdmin !== 'n') {
-            console.log('user', pickUser(user))
-            console.log('user.isAdmin is not y or n', user.isAdmin)
+            console.log('invalid user', describeKeys(user))
+            console.log('user.isAdmin is not y or n', describeType(isAdmin))
             console.log('can not get the role of user')
             return Promise.reject('errUserRoleMissing')
         }
@@ -430,7 +436,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
         //check
         if (!allowed) {
-            console.log('user', pickUser(user))
+            console.log('denied user', describeKeys(user))
             console.log(`user does not have permission`)
             return Promise.reject('errUserNoPermission')
         }
@@ -454,7 +460,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
         //check
         if (!b) {
-            console.log('user', pickUser(user))
+            console.log('denied user', describeKeys(user))
             console.log(`user does not have permission`)
             return Promise.reject('errUserNoPermission')
         }
@@ -477,7 +483,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
         //check
         if (!iseobj(payload)) {
-            console.log('payload', maskTok(payload)) //本體可夾 token（POST payload.token）, 無效本體（陣列/字串等）不原樣印出
+            console.log('payload', describeType(payload)) //請求本體不印值（含 maskTok 之頭尾字元）, 只印型別（D22）; 無效本體為非物件或空物件, 無 token 欄
             console.log(`invalid payload in req`)
             return Promise.reject('errPayloadInvalid')
         }
@@ -515,7 +521,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
         fs.writeFileSync(fpEntryOut, c, 'utf8')
     }
     catch (err) {
-        console.log(err)
+        console.log('generate index.html error', getDiagBriefErr(err)) //只印錯誤類別與白名單代碼之摘要, 不印錯誤物件 (D22)
         console.log(`can not generate ${fnEntryOut}`)
     }
 
@@ -535,7 +541,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
                     //check
                     if (!isestr(token)) {
-                        console.log('req.query', maskQuery(get(req, 'query'))) //重複 ?token= 時 token 為陣列, 整包 query 須經遮罩
+                        console.log('req.query', describeKeys(get(req, 'query'))) //查詢參數只印鍵名, 不印值 (D22); token 另行經 maskTok (重複 ?token= 時為陣列)
                         console.log('token', maskTok(token))
                         console.log('[API]getUserByToken/check token: invalid token')
                         return Promise.reject('errTokenNoPermission')

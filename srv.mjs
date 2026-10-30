@@ -3,6 +3,7 @@ import WWebTask from './server/WWebTask.mjs'
 import getSettings from './g.getSettings.mjs'
 import get from 'lodash-es/get.js'
 import iseobj from 'wsemi/src/iseobj.mjs'
+import getDiagBriefErr from 'wsemi/src/getDiagBriefErr.mjs'
 import axios from 'axios'
 import JSON5 from 'json5'
 import fs from 'fs'
@@ -49,6 +50,16 @@ let opt = {
     },
     webLogo: '',
 
+}
+
+//briefSsoErr: SSO 請求例外之安全摘要 (D22; dspec 診斷輸出與遮罩 D2): 錯誤類別與白名單代碼取 wsemi getDiagBriefErr, 另加整數 HTTP 狀態碼 (axios 對非 2xx 亦拋錯, 無 cause); 不含訊息、回應本文與網址
+let briefSsoErr = (err) => {
+    let r = getDiagBriefErr(err)
+    let status = get(err, 'response.status')
+    if (Number.isInteger(status)) {
+        r.httpStatus = status
+    }
+    return r
 }
 
 let getUserByToken = async (token) => {
@@ -129,15 +140,15 @@ let getUserByToken = async (token) => {
         let state = get(res, 'data.state', '')
         let u = get(res, 'data.msg', null)
         if (state !== 'success' || !iseobj(u)) {
-            console.log('SSO getSsoUserInfor 失敗', state)
+            console.log('SSO getSsoUserInfor 失敗') //不印 state 與 msg: 皆為 SSO 之回傳值 (spec D22)
             return {}
         }
         return { id: u.id, name: u.name, email: u.email, isAdmin: u.isAdmin }
     }
     catch (err) {
-        //不印 err.message: 請求例外之 message 可能含已代入 ssoAppToken 與使用者權杖之完整網址, 只印錯誤名稱與底層代碼 (spec D15);
-        //axios 對非 2xx 亦拋錯 (無 cause), 另印 HTTP 狀態碼以保留診斷 (數值, 不含權杖)
-        console.log('SSO getSsoUserInfor error', get(err, 'name', ''), get(err, 'cause.code', ''), get(err, 'response.status', ''))
+        //不印 err.message: 請求例外之 message 可能含已代入 ssoAppToken 與使用者權杖之完整網址 (spec D15); 不印錯誤物件與 err.name (名稱可被改寫);
+        //只印 briefSsoErr 之摘要 (錯誤類別、白名單代碼、整數 HTTP 狀態碼; spec D22)
+        console.log('SSO getSsoUserInfor error', briefSsoErr(err))
         return {}
     }
 }
@@ -187,7 +198,8 @@ let verifyAppUser = (user, from) => {
 let instWWebTask = WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser, opt)
 
 instWWebTask.on('error', (err) => {
-    console.log(err)
+    //事件值為後端或驅動之錯誤原文 (字串或 Error), 可含連線字串、帳密與資料值: 只印錯誤類別與白名單代碼之摘要 (spec D22; dspec 診斷輸出與遮罩 D2)
+    console.log('WWebTask error event', getDiagBriefErr(err))
 })
 
 

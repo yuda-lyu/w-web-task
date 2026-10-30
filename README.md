@@ -150,7 +150,7 @@ node g.initialData.mjs        # 初始化 DB (種子: demo 頻道)
 - **一般使用者 (`isAdmin≠'y'`) 不再能做管理類操作** (頻道與成員之建立 / 修改 / 刪除): 回 `errUserNotAdmin`. 原只要通過部署方 `verifyClientUser` 即可; 部署方只能在本套件之檢查上再收緊.
 - **頻道內容限成員**: 一般使用者只能讀寫自己為成員之頻道; 非成員回 `errChannelNotMember` (任務為 `errTaskNotFound`). **agent 若以一般使用者 (或綁一般使用者之應用系統 token) 認證, 其 `user.id` 須為頻道成員**: `channel.agentId` 等於其 `user.id` 時存檔會自動建立 agent 成員列 (建議作法); `channel.agentId` 為友善名稱而 `user.id` 不同者, 須由系統管理者於成員頁加入其 `user.id` 為成員. 原本 `ackChannel` 缺列路徑會替任何通過連線閘者自動建立成員列 (等同自我加入任何頻道), **現僅系統管理者可建列(既有成員只更新自己的游標列; 授權通過後成員列才被系統管理者移除者亦不得加回)**. 以系統服務用途之應用系統 token (`isAdmin='y'`) 認證之 agent 與系統管理者不受影響.
 - **升版時稽核 `channelMembers`(升版前遺留之成員列即授權)**: 修前任何通過連線閘者可經 `ackChannel` 缺列路徑自我加入任何頻道、一般使用者亦可經管理類函數為自己加列, 這些列升版後仍在, 而成員資格現在即存取權. 稽核: 以系統管理者 token 對各頻道呼叫 `getChannelMembers(channelId)`, 自建列之特徵為 `userId === memberId`(建立者即成員本人, 多為 `memberType==='agent'`); 預期之 agent 成員(由 `saveChannel` 依 `agentId` 自動建立者之 `userId` 為存檔之系統管理者)不符此特徵, 符合者逐一確認後於成員頁刪除非預期者. **系統管理者降級時**: 系統管理者(含 `isAdmin='y'` 之 agent)以非成員身分 `ackChannel` 會替自己建游標列(agent 之已讀游標須有列), 該帳號日後降為一般使用者時這些列使其仍為該頻道成員——降級時須同步清理其成員列.
-- **其他變更**: ①連線閘只認 `Authorization: Bearer <token>`(方案名不分大小寫、其後一個以上空白), 其他方案與缺憑證視為未帶 token(原無條件刪前 7 字元); ②`GET /api/getUserByToken` 只回 `id / name / email / isAdmin` 四欄(原樣回傳部署方之物件; 前端 `userSelf` 只讀此四欄), 認證失敗之後端 console 亦只印此四欄; ③HTTP `verifyAppUser` 與資料通道之 `verifyClientUser` 同樣只收使用者物件之淺拷貝(鉤子改寫傳入之物件不影響本套件之角色與身分判斷); ④兩個部署方鉤子各管一種入口——資料通道(瀏覽器前端)經 `verifyClientUser`, HTTP REST 路由(agent 與外部應用)經 `verifyAppUser`; 部署方要完全拒絕某使用者, 須兩個鉤子都拒絕(只拒 `verifyClientUser` 時其 HTTP 路由仍可用, 2026-10-25 task-verify02 實測).
+- **其他變更**: ①連線閘只認 `Authorization: Bearer <token>`(方案名不分大小寫、其後一個以上空白), 其他方案與缺憑證視為未帶 token(原無條件刪前 7 字元); ②`GET /api/getUserByToken` 只回 `id / name / email / isAdmin` 四欄(原樣回傳部署方之物件; 前端 `userSelf` 只讀此四欄), 認證失敗之後端 console 原亦印此四欄之值(2026-10-31 起改只印鍵名, 見 〈Breaking changes (console 診斷輸出不再印資料值)〉); ③HTTP `verifyAppUser` 與資料通道之 `verifyClientUser` 同樣只收使用者物件之淺拷貝(鉤子改寫傳入之物件不影響本套件之角色與身分判斷); ④兩個部署方鉤子各管一種入口——資料通道(瀏覽器前端)經 `verifyClientUser`, HTTP REST 路由(agent 與外部應用)經 `verifyAppUser`; 部署方要完全拒絕某使用者, 須兩個鉤子都拒絕(只拒 `verifyClientUser` 時其 HTTP 路由仍可用, 2026-10-25 task-verify02 實測).
 - **清單與統計收斂**: 一般使用者之 `getChannelsList` / `getChannels` / `getStats` 與資料通道 `channels.select` / `channelMembers.select` 只含所屬頻道 (原回整表).
 - **檔案**: `uploadFile` / `getFileInfo` / `getFile` 限系統管理者或任一頻道成員.
 - **執行身分**: 資料通道每個函數呼叫前之 `__sysToken__` 驗證由「只取 token 對應之 id」改為與連線閘同等完整 (認證 + `verifyClientUser(淺拷貝, 'main')`): 缺 `id / email / name / isAdmin` 欄位或被 `verifyClientUser` 拒絕者, 函數不執行. `verifyClientUser` 每個資料通道函數呼叫多被呼叫一次 (`from` 為 `'main'`), 收到的是使用者物件之淺拷貝.
@@ -206,7 +206,7 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 - **平時會見到什麼**: 本套件之寫入走 `woItems` 不經 `procOrm`, 資料通道只開 `select` 且 w-serv-webdata 先擋無效條件 (`invalid find[…]`, 不到 w-serv-orm), 故實際只會見到資料庫讀取失敗: `channels.select catch` / `channelMembers.select catch` (`safe` 為 `{ errType }`). 需要原文時請看資料庫端或程序的錯誤輸出; 失敗之寫入由 `runOps` 記 `err` key (`saveRolledBack` / `saveWriteFail`).
 - **升版注意**: 監控若曾比對行程標準輸出中的 w-serv-orm 診斷字樣, 改看 srLog 的 `orm-diag`. 使用 `WWebTask(...)` 入口者無須動作.
 - **後端驅動例外 (外來值) 離開本套件前一律遮罩** (規格: 診斷輸出與遮罩 D3; `server/genDiag.mjs`): 本套件以 wsemi 的 `getDiag({}, { secrets })` 建立一個遮罩出口 `diag`, 秘密來源為建構 `WWebTask(WOrm, url, db, …)` 時給的 `url` (以 wsemi 的 `getDiagSecrets({ conns: [url] })` 分類; 連線字串含帳密者, 整串、帳密與裸密碼皆遮; 檔案位置如 lmdb 的 `./db` 視為儲存路徑, 對外錯誤值不遮路徑); 網址帳密、`password=`、`Bearer` 等形態即使不在 `url` 內也由 wsemi 的樣式規則遮罩. 經 `diag.mask` / `diag.err` 的出口共 7 站: 寫入失敗 `runOps` 的原因與補償失敗、`archiveSweep` 補償失敗與失敗 (`srLog.error` 的 `msg`)、資料通道函數失敗 (`srLog.error` 的 `err` 與回給遠端的 reject)、HTTP REST 核心失敗 (回應與 `srLog` 的 `msg`)、`getFile` 失敗 (404 回應與 `srLog` 的 `msg`); 另有 4 站來源不明的轉拋 (`guarded`、封存補償後轉拋、`lockSave`、`wrapErrLog`) 於轉出前經 `diag.err` (無應遮者回原物件; 有則回保型副本, 類別、`name`、`code` 不變, 只換 `message`). **不遮**: 本套件自身以固定詞彙組成的失敗 (錯誤 key 字面) 與成功回應的資料. 站點全集與測試見 `sgud/rule/rulebook_backend.md` R-ORMDIAG-06、R-ORMDIAG-07.
-- **未涵蓋 (Not covered)**: ①未出現在 `url` 的秘密——連線字串以外另行提供給驅動的帳密 (本套件的 `WWebTask` 不接收), 或不以網址帳密 / `password=` / `Bearer` 形態出現的**裸密碼**, 若驅動未於丟出前處理, 本套件的遮罩遮不到 (wsemi 已知限制: 短於 4 字元的密碼不遮); ②第三方原生層直接寫入行程標準錯誤者 (如 lmdb 對損毀紀錄的傾印) 不在 JS 層可攔範圍, 部署端請以 `opt.logFd` 與行程輸出的存取權限管控; ③`console.log('WServOrm init failed', err)` 與其後原樣 throw 的錯誤由 w-serv-orm 在丟出前遮罩 (w-serv-orm ≥ 1.1.22), 本套件不再處理; ④w-orm-* 驅動自身的診斷輸出 (w-orm-lmdb ≥ 1.0.47 已改用 wsemi 共用模組) 由各驅動負責.
+- **未涵蓋 (Not covered)**: ①未出現在 `url` 的秘密——連線字串以外另行提供給驅動的帳密 (本套件的 `WWebTask` 不接收), 或不以網址帳密 / `password=` / `Bearer` 形態出現的**裸密碼**, 若驅動未於丟出前處理, 本套件的遮罩遮不到 (wsemi 已知限制: 短於 4 字元的密碼不遮); ②第三方原生層直接寫入行程標準錯誤者 (如 lmdb 對損毀紀錄的傾印) 不在 JS 層可攔範圍, 部署端請以 `opt.logFd` 與行程輸出的存取權限管控; ③`WServOrm init failed` 之 console 只印錯誤類別摘要 (見 〈Breaking changes (console 診斷輸出不再印資料值)〉); 其後原樣 throw 的錯誤由 w-serv-orm 在丟出前遮罩 (w-serv-orm ≥ 1.1.22), 本套件不再處理; ④w-orm-* 驅動自身的診斷輸出 (w-orm-lmdb ≥ 1.0.47 已改用 wsemi 共用模組) 由各驅動負責.
 
 ### Breaking changes (診斷輸出遷移至 wsemi 共用模組)
 
@@ -227,6 +227,21 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 - **`orm-diag` 記錄的 `safe` 只保留白名單鍵**: 轉接器傳 `{ safeKeys: SAFE_KEYS }` (`SAFE_KEYS` 為 w-serv-orm 公開之 `safe` 頂層鍵名單: `n`、`ks`、`skipped`、`ok`、`type`、`reason`、`msgs`、`table`、`tables`、`keys`、`nOther`; `errType`、`errCode` 恆保留). 名單外之頂層鍵 (含其巢狀物件值) 不寫入 srLog, 巢狀物件內之鍵不另過濾. 本套件正式路徑上 w-serv-orm 本就只產出名單內之鍵, 一般部署無可觀察變化; 受影響者為直接組裝 `funLog`、或自 `safe` 讀取名單外鍵名的人 (舊版轉接器原樣保留, 如 `__proto__` 自有鍵).
 - **內部相依**: `server/genDiag.mjs` 不再 import `w-serv-orm/src/getDiagBrief.mjs` (w-serv-orm 1.1.23 已刪 `getUrlSecrets`), 秘密分類改 wsemi 的 `getDiagSecrets({ conns: [url] })`, 結果相同; 該檔無對外匯出, `WWebTask(...)` 使用者不受影響.
 
+### Breaking changes (console 診斷輸出不再印資料值)
+
+後端 (`server/WWebTask.mjs`) 與參考入口 (`srv.mjs`、`g.initialData.mjs`) 的 console 診斷, 依「預設不輸出資料值」(規格: 診斷輸出與遮罩 D2; 設計 `spec/設計要點與取捨.md` D22, 取代 D15 原「不做: console 印使用者物件」之取捨) 只印**固定詞彙、型別、鍵名與錯誤類別摘要**, 不印使用者物件、請求本體、查詢參數值、傳入參數值、後端回傳值與錯誤物件 (專案原則 14: 不做舊版相容). 行程標準輸出 (pm2 / 容器常收集) 之文字內容改變如下, **回應之錯誤 key、`WWebTask(...)` 對無效參數之同步拋錯、`srLog` 記錄皆不變**:
+
+- **建構參數無效** (`invalid WOrm`、`invalid url`、`invalid db`、`invalid getUserByToken`、`invalid verifyClientUser`、`invalid verifyAppUser`): 其後原印傳入值本身 (`url` 可為含帳密之連線字串或物件), 改印型別, 如 `invalid url (typeof object)`.
+- **`WServOrm init failed`**: 其後原印錯誤物件 (含訊息與堆疊), 改印 `{ errType, errCode? }` (wsemi `getDiagBriefErr`: 錯誤類別與白名單內之機器代碼); 其後之 throw 不變.
+- **使用者物件** (認證失敗): 原印 `user` 與 `id / name / email / isAdmin` 四欄之值; 改印 `invalid user (keys: id,name,…)` (欄位不齊、`isAdmin` 非 `y`／`n`) 或 `denied user (keys: …)` (`verifyClientUser`／`verifyAppUser` 拒絕), 只列鍵名; `user.isAdmin is not y or n` 之後原印該值, 改印型別.
+- **無效請求本體** (`invalid payload in req`): `payload` 之後原印 `maskTok` 之結果 (露出頭尾各最多 4 字元), 改印 `(typeof array|string|object)`.
+- **`/api/getUserByToken` 無效 token**: `req.query` 之後原印整包查詢參數 (token 鍵遮罩, 其餘鍵之值原樣), 改印 `(keys: …)`; `token` 仍經 `maskTok`.
+- **靜態檔入口產生失敗**: 原單獨一行 `console.log(err)`, 改 `generate index.html error { errType, … }`.
+- **參考入口 `srv.mjs`**: `SSO getSsoUserInfor 失敗` 不再帶 SSO 回傳之 `state`; `SSO getSsoUserInfor error` 之後由 `err.name`、`cause.code`、HTTP 狀態碼三個值, 改為 `{ errType, errCode?, httpStatus? }`; `WWebTask` 之 `'error'` 事件原印事件原文 (字串或 Error), 改印 `WWebTask error event { errType, errCode? }`.
+- **`g.initialData.mjs`** (種子腳本): `clear dbf warn` 之後原印 `err.message`、`initialData catch` 之後原印錯誤物件, 皆改印 `{ errType, errCode? }`.
+- **不變**: 權杖 (`Authorization`、`?token=`) 之 console 仍經 `maskTok`; 固定詞彙行 (如 `can not get the userId`); `apiType` (w-converhp 路由表之固定字面) 與靜態檔入口之部署路徑 (`fpEntryIn`).
+- **影響**: 依 console 文字比對、擷取或除錯者, 需要細節請改看 `srLog` (`opt.logFd`) 或資料庫端; 前端 (瀏覽器) 之 console 不在本次範圍.
+
 ## 測試
 
 ```bash
@@ -235,6 +250,8 @@ npx mocha test/unit-ormDiagLog.test.mjs --reporter list    # w-serv-orm 診斷�
 npx mocha test/api-ormDiag.test.mjs --reporter list        # 同上, 真實 WWebTask 子行程 (port 11308)
 npx mocha test/unit-ormDiagMask.test.mjs --reporter list   # 外來值遮罩出口 (genDiag; procCore / lockSave 的出口與站點全集)
 npx mocha test/api-ormLeak.test.mjs --reporter list        # 上游未遮罩時, 真實 WWebTask 的 REST / getFile / 資料通道 / 封存掃描出口 (port 11309; 約 40 秒)
+npx mocha test/unit-consoleSites.test.mjs --reporter list  # console 站點之結構不變式 (AST 掃描) 與 describeKeys / describeType
+npx mocha test/api-consoleLeak.test.mjs --reporter list    # 含識別值之測資觸發全部 console 站點, 輸出不含該值 (port 11310 / 11311 / 11312)
 npx mocha test/api-agent.test.mjs --reporter list           # API 契約 (agent HTTP 生命週期)
 npx mocha test/api-callerMatrix.test.mjs --reporter list    # 呼叫者存取矩陣 (入口 × 呼叫者 462 格; 身分驗證 / 角色 / 頻道成員)
 node test/e2e-channeltask.test.mjs --baseline               # 產製 e2e 標準圖
