@@ -8,6 +8,7 @@ import cacheSt from 'wsemi/src/cacheSt.mjs'
 import WOrm from 'w-orm-lmdb/src/WOrmLmdb.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
 import { buildBaseline } from 'w-serv-orm/src/baseline.mjs'
+import { SAFE_KEYS } from 'w-serv-orm/src/safeKeys.mjs'
 import ds from '../../src/schema/index.mjs'
 import channelsContract from '../../src/schema/contracts/channels.mjs'
 import getMembersContract from '../../src/schema/contracts/channelMembers.mjs'
@@ -42,8 +43,8 @@ async function mkEnv(name) {
         }
     }
 
-    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog }); useCache 未給(false)
-    let wp = WServOrm(ds, WOrm, dir, 'worm', { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog })
+    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o), { safeKeys: SAFE_KEYS }).funLog }); useCache 未給(false)
+    let wp = WServOrm(ds, WOrm, dir, 'worm', { funLog: genDiagFunLog((o) => srLog.warn(o), { safeKeys: SAFE_KEYS }).funLog })
     let { woItems, withTabLocks, guardWrite } = wp
     let kmx = pmKeyMutex()
     let cst = cacheSt()

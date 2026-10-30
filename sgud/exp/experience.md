@@ -95,6 +95,16 @@
 - **變異改在副本跑**(`tmp/mig-task3/mutate.mjs`): 副本放 `./tmp/` 下, `node_modules` 靠目錄向上解析, 不需連結; mocha 以 `node node_modules/mocha/bin/mocha.js … --exit` 直接啟動(使「稍候無上限」那類變異會卡死時可由逾時終止, 且 `--exit` 切斷殘留的 setImmediate 迴圈).
 - **測試鎖被他套件獨佔負載試驗占滿時**(本輪遇 w-screenctl `loadrun … exclusive`): 只能排隊; 先把改動、文件做完, 再一次取鎖合併跑(舊套件下之新測試＋全套), 以 detached 鏈各一取一放.
 
+## safeKeys 與 w-serv-orm 內部檔(2026-10-30, b-task〔20261030184428〕, 排程第 187、192 項下游; 規則見 `rulebook_backend.md` R-ORMDIAG-08, 決策見 `spec/設計要點與取捨.md` D21 末條)
+
+- **升版後立刻紅的兩案是「行為隨白名單變」, 不是缺陷**: OD-U-08(`__proto__` 自有鍵原保留為自有鍵)與 OD-U-09(`getDiag({ funLog }, { safeKeys: ['mode'] })`, `mode` 不在 SAFE_KEYS)在轉接器傳 `safeKeys` 後必紅; 處置是改斷言並於 README〈Breaking changes〉載明, 不是還原 `safeKeys`。「保留為自有鍵」之行為仍由語料 A13(白名單含 `__proto__` 時)守。
+- **wsemi 共用語料是對「不傳 opt 之轉接器」寫的**: `_diagCases` 之 `genDiagFunLog` 組各案用任意鍵名(`n`、`un`、`op`…)並自帶 opt(A11～A13 為 `safeKeys` 語意); 正式運算式帶 `safeKeys: SAFE_KEYS` 後 A01／A03／A09／A10／A11／A12／A13 全紅(名單外鍵被丟)。處置: `test/tools/diagWiring.mjs` 新增 `callOpt(srLog, opt)`——**正式寫入接線 `(o) => srLog.warn(o)` 不變, 僅第 2 引數換成案自帶 opt**; 正式之 `safeKeys` 另由 OD-S-01(運算式原文與 import)、OD-U-11、OD-U-12、OD-K-01 守。不為讓語料綠而拿掉正式 `safeKeys`, 也不把這些案列「不適用」(A04／A06 守的 `srLog.warn` 回傳值接線要留在正式運算式上)。
+- **站點運算式出現具名 import 時, 取值工具要跟著解析**: `diagWiring.mjs` 原只認 `import x from '…'`; `SAFE_KEYS` 是具名 import, 不解析則 `new Function` 內 `ReferenceError`。變異 M08 因此改用「站內等價字面陣列」(行為等價)而不是刪 import, 才單獨驗得出 OD-S-01 對「取自 w-serv-orm 公開入口」的固定。
+- **「丟得掉」與「不丟 w-serv-orm 自己產出之鍵」是兩條相反方向的約束, 缺一不可**: OD-U-11／OD-U-12 守前者(M01、M04、M06 由它們抓), OD-K-01 守後者(M02、M03、M05 由它抓)。OD-K-01 以第三實例 C 帶「原始」funLog(只記 label 與 safe, `noDetail: true`)與正式轉接之 A 對同一組真實 w-serv-orm 失敗情境(8 種, 含 `msgs`、`errCode`)各呼叫一次, 逐筆比 label 與 `safe` 頂層鍵; 注意修前(未給 `safeKeys`)此案也綠, 單看它抓不到「拿掉 safeKeys」。
+- **判定「公開入口」以被依賴套件的 README 為準**: w-serv-orm 的 `src/baseline.mjs`(〈純函數子模組〉)與 `src/safeKeys.mjs`(〈公開 SAFE_KEYS〉)是公開深層匯入, `src/checkOptRemoved.mjs` 不在 README 內(只有本套件以 D17 引用)——登錄為「既有例外」並釘死僅 `server/WWebTask.mjs` 可用, 而非默默放行或自寫(D17: 規則與訊息由 w-serv-orm 單一擁有)。import 全表掃描用**明列目錄**(`server`、`src`、`test`、`toolg` ＋根目錄程式檔), 不走整個專案根(`db`、`uploadTemp`、`user_data` 等資料目錄), 且只認 `from`／`import()`／`require` 語法, 避免測試檔內的字串描述自我命中。
+- **`getDiagSecrets({ conns })` 與舊 `getUrlSecrets` 等價**: 舊函數已隨 w-serv-orm 1.1.23 刪除, 無法直接對照; OM-F-06 以測試端明列的規則(含 `://` 或 `@` 列網址, 其餘列路徑)對 8 種位址(連線字串含帳密、無帳密、僅 `@`、相對路徑、`D:/`、反斜線、絕對路徑、含空白)逐字比對 `genDiag(url)` 與依規則明列 `urls`／`paths` 者的 `mask`／`err` 結果。
+- **變異在原檔進行, 由 `quiet-run --lock` 包住一次取鎖**(`tmp/b-task/mutate.mjs`): 腳本先備份原檔與 sha256, 每個變異「還原 → 套用(恰一處命中才套) → 跑 mocha → 還原」, `finally` 與 `process.on('exit')` 皆還原並回驗 sha256; 與 mig-task3 之副本法不同(本輪被測僅 2 個小檔之文字)。`PRE` 變異以 `git show HEAD:<檔>` 取修前內容(唯讀)。修前還原在新相依下連 `genDiag.mjs` 都載入失敗(`getUrlSecrets` 已刪), 所以逐項證明「safeKeys 缺」須用 M01 而不是 `PRE`。
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

@@ -23,6 +23,7 @@ import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
 import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
 import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
+import { SAFE_KEYS } from 'w-serv-orm/src/safeKeys.mjs'
 import procLang from './procLang.mjs'
 import procCore from './procCore.mjs'
 import createLockSave from './lockSave.mjs'
@@ -43,7 +44,7 @@ import ds from '../src/schema/index.mjs'
  * 函數層級（資料通道與HTTP REST共用同一張入口函數表，server/access.mjs）：管理類（頻道與成員之建立、修改、刪除）限系統管理者；訊息、任務、已讀游標、成員名冊限系統管理者或該頻道成員；檔案限系統管理者或任一頻道成員；頻道清單、統計、資料通道之channels／channelMembers的select只回呼叫者有權看之頻道之資料。
  * 系統管理者＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理者）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
  * 公開入口（無須token）只有前端靜態檔；/api/*與資料通道一律須token，系統函數只公開'[sys:getFuncList]'（且本套件之getUserIdByToken對空token fail-closed）。
- * 診斷輸出：w-serv-orm（≥1.1.22）之診斷經wsemi之genDiagFunLog轉寫為srLog.warn({ event: 'orm-diag', label, safe })，只寫標籤與安全摘要，不取細節（detail）、不寫console；srLog缺warn不再於建構時拋錯（寫入失敗被吞）。選項與遮罩規則見wsemi之getDiag／genDiagFunLog與w-serv-orm之說明，本套件不提供logDetail。
+ * 診斷輸出：w-serv-orm（≥1.1.23）之診斷經wsemi之genDiagFunLog轉寫為srLog.warn({ event: 'orm-diag', label, safe })，只寫標籤與安全摘要，不取細節（detail）、不寫console；safe之頂層鍵限w-serv-orm公開之SAFE_KEYS（轉接器傳safeKeys作第二道防線，名單外之鍵丟棄，errType、errCode恆保留）；srLog缺warn不再於建構時拋錯（寫入失敗被吞）。選項與遮罩規則見wsemi之getDiag／genDiagFunLog與w-serv-orm之說明，本套件不提供logDetail。
  * 外來值遮罩：後端驅動之例外原文（外來值）離開本套件前（回遠端之失敗msg、資料通道函數失敗之reject、寫入srLog之msg與err、封存補償後轉拋）一律經wsemi getDiag實例之diag.mask／diag.err（server/genDiag.mjs，秘密來源為url：連線字串含帳密者整串、帳密與裸密碼皆遮，檔案位置視為儲存路徑不遮；網址帳密、password=、Bearer等形態由樣式規則遮罩）；本套件自身以固定詞彙（i18n key）組成之失敗與成功回應之資料不經遮罩。
  *
  * @class
@@ -192,11 +193,12 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
 
     //WServOrm
-    //opt.funLog (w-serv-orm ≥ 1.1.22): 診斷輸出改交 srLog, 由 wsemi 之 genDiagFunLog 轉接 (只寫 label 與 safe 為 srLog.warn({ event:'orm-diag', label, safe }), 不取 detail; spec D21, 規則 wsemi R-DIAG-01),
-    //w-serv-orm 不再寫 console; 其餘選項與行為不變. 每次取用 srLog.warn (不於建構時固定), 與其他 srLog 呼叫點一致; 本套件不呼叫 close (srLog 與行程同壽)
+    //opt.funLog (w-serv-orm ≥ 1.1.23): 診斷輸出改交 srLog, 由 wsemi 之 genDiagFunLog 轉接 (只寫 label 與 safe 為 srLog.warn({ event:'orm-diag', label, safe }), 不取 detail; spec D21, 規則 wsemi R-DIAG-01),
+    //w-serv-orm 不再寫 console; 其餘選項與行為不變. 每次取用 srLog.warn (不於建構時固定), 與其他 srLog 呼叫點一致; 本套件不呼叫 close (srLog 與行程同壽).
+    //safeKeys: 傳 w-serv-orm 公開之 SAFE_KEYS (其 safe 頂層鍵之單一來源, 規則 w-serv-orm R-DIAG-02), 作為寫入 srLog 前之第二道防線: 名單外之鍵丟棄 (errType、errCode 恆保留), 不另抄一份名單
     let wp = {}
     try {
-        wp = WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog })
+        wp = WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o), { safeKeys: SAFE_KEYS }).funLog })
     }
     catch (err) {
         //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動

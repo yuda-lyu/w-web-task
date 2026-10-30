@@ -12,6 +12,8 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import cacheSt from 'wsemi/src/cacheSt.mjs'
+import getDiag from 'wsemi/src/getDiag.mjs'
+import getDiagSecrets from 'wsemi/src/getDiagSecrets.mjs'
 import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
 import procCore from '../server/procCore.mjs'
 import createLockSave from '../server/lockSave.mjs'
@@ -120,13 +122,14 @@ describe('unit-ormDiagMask(外來值遮罩出口 diag 之接線, R-ORMDIAG-07, d
     // ── OM-S 站點接線 ──────────────────────────────────────────────────────────
     describe('OM-S 站點接線(原始碼)', function() {
 
-        it('OM-S-01 server/genDiag.mjs 之宣告: wsemi getDiag({}, { secrets: getUrlSecrets(url) }), 秘密分類取自 w-serv-orm 單一定義, 不另寫遮罩', function() {
-            //R-ORMDIAG-07「遮罩一律由 wsemi 單一擁有, 本套件只宣告秘密來源」
+        it('OM-S-01 server/genDiag.mjs 之宣告: wsemi getDiag({}, { secrets: getDiagSecrets({ conns: [url] }) }), 秘密分類取自 wsemi 單一定義(getDiagSecrets 之 conns), 不 import w-serv-orm 之任何檔, 不另寫遮罩', function() {
+            //R-ORMDIAG-07「遮罩一律由 wsemi 單一擁有, 本套件只宣告秘密來源」; R-ORMDIAG-08「不 import w-serv-orm 之內部檔」(w-serv-orm 1.1.23 已刪 getUrlSecrets)
             let src = fs.readFileSync(path.join(SERVER, 'genDiag.mjs'), 'utf8')
             let code = codeLines('genDiag.mjs').join('\n')
             assert.ok(/^import getDiag from 'wsemi\/src\/getDiag\.mjs'$/m.test(src))
-            assert.ok(/^import \{ getUrlSecrets \} from 'w-serv-orm\/src\/getDiagBrief\.mjs'$/m.test(src))
-            assert.ok(code.includes('return getDiag({}, { secrets: getUrlSecrets(url) })'), `宣告不符: ${code}`)
+            assert.ok(/^import getDiagSecrets from 'wsemi\/src\/getDiagSecrets\.mjs'$/m.test(src))
+            assert.ok(code.includes('return getDiag({}, { secrets: getDiagSecrets({ conns: [url] }) })'), `宣告不符: ${code}`)
+            assert.ok(!/w-serv-orm|getUrlSecrets|getDiagBrief/.test(code), `genDiag 不得再取用 w-serv-orm 之內部檔或已刪之 getUrlSecrets: ${code}`)
             //不自寫遮罩: 無 RegExp 字面量遮蔽、無 replace、無 '***' 字面
             assert.ok(!/\.replace\(|\*\*\*|new RegExp/.test(code), `genDiag 不得自寫遮罩: ${code}`)
         })
@@ -263,6 +266,31 @@ describe('unit-ormDiagMask(外來值遮罩出口 diag 之接線, R-ORMDIAG-07, d
             assert.strictEqual(diag.err(e), e)
             assert.strictEqual(diag.err('saveStale'), 'saveStale')
             assert.strictEqual(diag.mask('errFileNotFound'), 'errFileNotFound')
+        })
+
+        it('OM-F-06 連線位址分類(dspec 規則: 含 :// 或 @ 者列網址, 其餘列儲存路徑): genDiag(url) 與依該規則明列 urls / paths 者遮罩結果逐字相同', function() {
+            //getDiagSecrets 之 conns 取代 w-serv-orm 已刪之 getUrlSecrets(結果相同, wsemi 語料 U22); 此處以測試端明列之分類規則作獨立對照, 不經 genDiag
+            let addrs = [
+                URL_CRED,
+                'mongodb://h.example.com:27017/db',
+                'svc-user:Qw8Rt-conn77@h.example.com',
+                './db',
+                'D:/data/db',
+                'C:\\data\\db02',
+                '/var/lib/worm-db',
+                './my db dir',
+            ]
+            for (let u of addrs) {
+                let isConn = u.includes('://') || u.includes('@')
+                let ref = getDiag({}, { secrets: getDiagSecrets(isConn ? { urls: [u] } : { paths: [u] }) })
+                let text = `open ${u} failed; password=abcd1234; tail ${u}`
+                assert.strictEqual(genDiag(u).mask(text), ref.mask(text), `mask 不一致: ${u}`)
+                let e = new Error(text)
+                assert.strictEqual(genDiag(u).err(e).message, ref.err(e).message, `err 不一致: ${u}`)
+            }
+            //確實有分兩類: 連線字串之整串被遮, 檔案位置不被遮
+            assert.ok(!genDiag(URL_CRED).mask(`x ${URL_CRED}`).includes(PW))
+            assert.ok(genDiag('./db').mask('x ./db').includes('./db'))
         })
 
         it('OM-F-05 永不拋錯: url 為非字串、空字串、物件時仍回可用之 diag', function() {

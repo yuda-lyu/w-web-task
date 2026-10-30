@@ -9,7 +9,7 @@
 | 分冊 | 類型 | 收錄節 |
 |---|---|---|
 | `rulebook_test.md` | 測試 | 「測試配置(對應全域 §16.3–16.5)」、「spec → 測試對照」、「e2e 落地映射(對應全域技能[role-coder-for-test-e2e] §3 契約)」、「e2e harness 行程所有權(own 政策; 單一擁有者 `test/tools/harnessLifecycle.mjs` + `harnessProc.mjs`)」 |
-| `rulebook_backend.md` | 後端業務與資料通道 | 「業務與後端規則(對應 `spec/設計要點與取捨.md`)」、「自有套件設定與資料通道授權(D17; 2026-10-14 起)」、「w-serv-orm 診斷輸出導入 srLog(D21; 2026-10-28 起)」(2026-10-29 起規則本體為 wsemi R-DIAG-01 與 `C:\opensrcOper\dspec\診斷輸出與遮罩.md`, 該節首段為摘要, R-ORMDIAG-01～07 為本套件之接線與站點(06、07 為外來值遮罩出口之站點全集與秘密來源宣告, 2026-10-30)) |
+| `rulebook_backend.md` | 後端業務與資料通道 | 「業務與後端規則(對應 `spec/設計要點與取捨.md`)」、「自有套件設定與資料通道授權(D17; 2026-10-14 起)」、「w-serv-orm 診斷輸出導入 srLog(D21; 2026-10-28 起)」(2026-10-29 起規則本體為 wsemi R-DIAG-01 與 `C:\opensrcOper\dspec\診斷輸出與遮罩.md`, 該節首段為摘要, R-ORMDIAG-01～08 為本套件之接線與站點(06、07 為外來值遮罩出口之站點全集與秘密來源宣告, 2026-10-30; 08 為轉接器 `safeKeys: SAFE_KEYS` 與 w-serv-orm import 全表, 2026-10-30)) |
 | `rulebook_security.md` | 權杖外洩防護 | 「權杖外洩防護(D15; 對應 w-web-sso ADR-068 之 W / M / K 契約)」 |
 | `rulebook_ui.md` | 前端 UI | 「前端 UI 規則(對應 `CLAUDE.md` UI 設計、全域技能[role-coder-for-vue-ui])」 |
 | `rulebook_changes.md` | 缺口、破壞性變更紀錄與跨套件規格 | 「已知缺口 / 待辦」、「破壞性變更紀錄」、「〔跨套件規格〕(主控 2026-10-16 依使用者交辦寫入)」 |
