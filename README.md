@@ -202,9 +202,23 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 
 後端日誌由 `srLog` (w-syslog) 依時段輪檔寫入 `opt.logFd` (預設 `./logs`), 只記事件名、錯誤 key 與必要之識別, 不記權杖與上游原文 (見上述 Security 與 D15).
 
-- **w-serv-orm 診斷輸出導入 srLog** (`w-serv-orm` ≥ 1.1.20; `server/ormDiagLog.mjs`, 設計 `spec/設計要點與取捨.md` D21): 本套件建立 `WServOrm` 時傳入 `opt.funLog`, w-serv-orm 的診斷輸出不再寫行程標準輸出 (pm2 / 容器常收集), 改記成 `srLog.warn({ event: 'orm-diag', label, safe })`. `label` 為標籤 (含表名與操作, 如 `channels.select catch`); `safe` 為不含主鍵、資料值與錯誤原文之摘要 (失敗筆數與位置 `{ n, ks }`、錯誤類別與機器代碼 `{ errType, errCode }`、拒收原因 `{ reason }` 等). **完整細節 (`detail`: 含主鍵與錯誤原文) 不取用、不落地**; 記錄有界 (字串 200 字、項數 20、深度 3). 日誌寫入失敗不影響原流程.
+- **w-serv-orm 診斷輸出導入 srLog** (`w-serv-orm` ≥ 1.1.22、`wsemi` ≥ 1.9.31; 設計 `spec/設計要點與取捨.md` D21): 本套件建立 `WServOrm` 時傳入 `opt.funLog`, 其值為 wsemi 之 `genDiagFunLog((o) => srLog.warn(o)).funLog` (`server/WWebTask.mjs`; 轉接與遮罩規則由 wsemi 單一擁有, 本套件不另寫), w-serv-orm 的診斷輸出不再寫行程標準輸出 (pm2 / 容器常收集), 改記成 `srLog.warn({ event: 'orm-diag', label, safe })`. `label` 為標籤 (含表名與操作, 如 `channels.select catch`); `safe` 為不含主鍵、資料值與錯誤原文之摘要 (失敗筆數與位置 `{ n, ks }`、錯誤類別與機器代碼 `{ errType, errCode }`、拒收原因 `{ reason }`、進度 `{ table }` 等, 鍵由 w-serv-orm 宣告白名單). **完整細節 (`detail`: 含主鍵、錯誤原文與憑證) 不取用、不落地** (funLog 帶 `noDetail`, w-serv-orm 不為本套件建構細節); 日誌寫入失敗不影響原流程. 診斷選項 (`logDetail`、`funLog` 之引數形狀、遮罩範圍與有界規則) 見 [wsemi 的 `getDiag`／`genDiagFunLog` JSDoc](https://github.com/yuda-lyu/wsemi) 與 [w-serv-orm README〈Diagnostic output〉](https://github.com/yuda-lyu/w-serv-orm); 本套件不提供 `logDetail`.
 - **平時會見到什麼**: 本套件之寫入走 `woItems` 不經 `procOrm`, 資料通道只開 `select` 且 w-serv-webdata 先擋無效條件 (`invalid find[…]`, 不到 w-serv-orm), 故實際只會見到資料庫讀取失敗: `channels.select catch` / `channelMembers.select catch` (`safe` 為 `{ errType }`). 需要原文時請看資料庫端或程序的錯誤輸出; 失敗之寫入由 `runOps` 記 `err` key (`saveRolledBack` / `saveWriteFail`).
 - **升版注意**: 監控若曾比對行程標準輸出中的 w-serv-orm 診斷字樣, 改看 srLog 的 `orm-diag`. 使用 `WWebTask(...)` 入口者無須動作.
+- **後端驅動例外 (外來值) 離開本套件前一律遮罩** (規格: 診斷輸出與遮罩 D3; `server/genDiag.mjs`): 本套件以 wsemi 的 `getDiag({}, { secrets })` 建立一個遮罩出口 `diag`, 秘密來源為建構 `WWebTask(WOrm, url, db, …)` 時給的 `url` (連線字串含帳密者, 整串、帳密與裸密碼皆遮; 檔案位置如 lmdb 的 `./db` 視為儲存路徑, 對外錯誤值不遮路徑); 網址帳密、`password=`、`Bearer` 等形態即使不在 `url` 內也由 wsemi 的樣式規則遮罩. 經 `diag.mask` / `diag.err` 的出口共 7 站: 寫入失敗 `runOps` 的原因與補償失敗、`archiveSweep` 補償失敗與失敗 (`srLog.error` 的 `msg`)、資料通道函數失敗 (`srLog.error` 的 `err` 與回給遠端的 reject)、HTTP REST 核心失敗 (回應與 `srLog` 的 `msg`)、`getFile` 失敗 (404 回應與 `srLog` 的 `msg`); 另有 4 站來源不明的轉拋 (`guarded`、封存補償後轉拋、`lockSave`、`wrapErrLog`) 於轉出前經 `diag.err` (無應遮者回原物件; 有則回保型副本, 類別、`name`、`code` 不變, 只換 `message`). **不遮**: 本套件自身以固定詞彙組成的失敗 (錯誤 key 字面) 與成功回應的資料. 站點全集與測試見 `sgud/rule/rulebook_backend.md` R-ORMDIAG-06、R-ORMDIAG-07.
+- **未涵蓋 (Not covered)**: ①未出現在 `url` 的秘密——連線字串以外另行提供給驅動的帳密 (本套件的 `WWebTask` 不接收), 或不以網址帳密 / `password=` / `Bearer` 形態出現的**裸密碼**, 若驅動未於丟出前處理, 本套件的遮罩遮不到 (wsemi 已知限制: 短於 4 字元的密碼不遮); ②第三方原生層直接寫入行程標準錯誤者 (如 lmdb 對損毀紀錄的傾印) 不在 JS 層可攔範圍, 部署端請以 `opt.logFd` 與行程輸出的存取權限管控; ③`console.log('WServOrm init failed', err)` 與其後原樣 throw 的錯誤由 w-serv-orm 在丟出前遮罩 (w-serv-orm ≥ 1.1.22), 本套件不再處理; ④w-orm-* 驅動自身的診斷輸出 (w-orm-lmdb ≥ 1.0.47 已改用 wsemi 共用模組) 由各驅動負責.
+
+### Breaking changes (診斷輸出遷移至 wsemi 共用模組)
+
+本套件不做舊版相容 (專案原則 14); 下列為升至 wsemi ≥ 1.9.31、w-serv-orm ≥ 1.1.22 之版本後 `orm-diag` 記錄的行為變化 (記錄形狀 `{ event, label, safe }`、等級 `warn`、事件名 `orm-diag` 不變), 以及失敗回應與日誌中後端例外原文的遮罩 (同版新增):
+
+- **`server/ormDiagLog.mjs` 已刪除** (原 `genOrmFunLog(srLog)`): 無對外匯出, 不影響 `WWebTask(...)` 使用者; 直接 import 該檔者改用 `wsemi/src/genDiagFunLog.mjs`.
+- **srLog 無效不再於建構時拋錯**: 舊版 `srLog` 缺 `warn` 函數即於 `WServOrm` 建立前拋 `invalid srLog`; 新版轉接以箭頭函數 `(o) => srLog.warn(o)` 每次取用 `srLog.warn`, 缺 `warn` 時寫入失敗被吞 (診斷輸出靜默遺失). `WWebTask(...)` 之 `srLog` 恆由內部 `srLogInit` 建立 (w-syslog 物件), 實際不會發生; 僅直接組裝者受影響.
+- **srLog 寫入回傳 rejected promise**: 舊版丟棄該 promise (成為未處理拒絕, Node 預設終止行程); 新版由 wsemi 標記已處理.
+- **label**: 控制字元換 `?`、至多 200 字元、非字串記為 `(label)` (舊版控制字元原樣).
+- **safe 之正規化改由 wsemi 單一擁有**: 只取自有可列舉字串鍵 (至多 50 鍵), 值限字串 (至多 200 字元)、有限數字、布林、`null`、陣列 (至多 20 項)、至多 2 層之純物件, 其餘 `[Object]`; `bigint` 記為 `(bigint)`、循環記為 `[Circular]` (舊版深度上限 3 層、超出項數記 `[n more]`, 函數／Symbol 記型別標記). 非物件之 `safe` (舊版字串、陣列原樣) 記為 `undefined` (w-serv-orm ≥ 1.1.22 之 safe 皆為物件).
+- **失敗回應與日誌中的後端例外原文改為遮罩後的文字** (外來值遮罩出口, 見上節): HTTP REST 的失敗 `msg`、`getFile` 的 404 `msg`、資料通道函數失敗的錯誤、`srLog.error` 記錄的 `msg` / `err`, 若含連線字串、帳密或權杖, 對應片段換為 `***`; 錯誤 key (如 `errFileNotFound`) 與成功資料不變. 依這些文字比對來源主機或帳號者請核對. 內部模組 `createLockSave(cst, diag)` 與 `procCore({ …, diag })` 新增必要的 `diag` 參數 (缺則建構即拋, 不以未遮罩狀態運作); 這兩個模組無對外匯出, `WWebTask(...)` 使用者不受影響.
+- **`safe` 內容 (來自 w-serv-orm 1.1.22)**: 進度為 `{ table }` (舊為表名字串)、拒收鍵為 `{ msgs: [...] }` (舊為陣列); `errType` 只列內建錯誤類別名 (驅動或使用端自訂類別一律記 `Error`), `errCode` 只收 wsemi 明列之代碼集合; 白名單外之鍵丟棄. 依 `safe.errType` 值域或 `safe.errCode` 統計者請核對.
 
 ## 測試
 
@@ -212,6 +226,8 @@ curl -s -X POST "$B/api/ackChannel" -H 'Content-Type: application/json' -d '{"to
 npx mocha test/unit-procCore.test.mjs --reporter list      # 單元 (procCore 邏輯/狀態守衛)
 npx mocha test/unit-ormDiagLog.test.mjs --reporter list    # w-serv-orm 診斷輸出導入 srLog (真實 w-serv-orm + lmdb; 不含個資)
 npx mocha test/api-ormDiag.test.mjs --reporter list        # 同上, 真實 WWebTask 子行程 (port 11308)
+npx mocha test/unit-ormDiagMask.test.mjs --reporter list   # 外來值遮罩出口 (genDiag; procCore / lockSave 的出口與站點全集)
+npx mocha test/api-ormLeak.test.mjs --reporter list        # 上游未遮罩時, 真實 WWebTask 的 REST / getFile / 資料通道 / 封存掃描出口 (port 11309; 約 40 秒)
 npx mocha test/api-agent.test.mjs --reporter list           # API 契約 (agent HTTP 生命週期)
 npx mocha test/api-callerMatrix.test.mjs --reporter list    # 呼叫者存取矩陣 (入口 × 呼叫者 462 格; 身分驗證 / 角色 / 頻道成員)
 node test/e2e-channeltask.test.mjs --baseline               # 產製 e2e 標準圖

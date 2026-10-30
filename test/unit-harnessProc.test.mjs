@@ -4,7 +4,7 @@
 //  R2 不失職（清理）：殺行程為同步 taskkill /F /T（exit／SIGINT／SIGTERM 路徑才殺得完），以 exit 事件或 PID 回驗。
 //  R3 不失職（重建種子）：種子子行程須印完成標記並真正關閉；catch 字樣即失敗；計時器不拖住行程。
 //  R6 可診斷：錯誤訊息含 PID 與命令列（或映像名）、子行程輸出（開頭＋結尾）。
-//除「isPortListening 真實 socket」「runUntilMarker 真實子行程」「acquirePortLock 真實 socket」外皆以注入之假依賴執行，
+//除「isPortListening 真實 socket」「runUntilMarker 真實子行程」「acquirePortLock 真實 socket」「listenerPids 真實查詢（LP12，Windows，自起之臨時 port）」外皆以注入之假依賴執行，
 //不碰 harness 使用中之 port 與行程（npm test 中本檔於 e2e 之後執行，此時 harness 之服務仍在）。
 //模組以 before 動態載入：模組不存在時各案各自失敗（紅燈可逐列辨識），而非整檔載入錯誤。
 import assert from 'assert'
@@ -12,6 +12,7 @@ import http from 'http'
 import net from 'net'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
+import { fakeExec, ok, err, ns, ps, row, BG } from './tools/portPidsFake.mjs'
 
 
 //netstat -ano 樣本（資料列取自本機實測格式；表頭於中文 Windows 為 cp950 在地化文字，以 utf8 讀入即為亂碼）
@@ -72,60 +73,128 @@ describe('unit-harnessProc（e2e／api harness 之 OS 層 helper）', function()
     }
 
 
-    // ── parseListenerPids（R1：只認本地位址為該 port 之監聽列；監聽之判定不依賴在地化狀態字）──────
-    describe('parseListenerPids', function() {
+    // ── listenerPids（R1：只認「本地埠相符、遠端為萬用位址且遠端埠 0」之監聽列，判定不依狀態欄；無人回 []、查詢失敗回 null，兩者須可區分）──
+    //2026-10-30 起 w-package-tools-e2e 1.0.12 委由 wsemi 之 execProcessPortPidsSync；parseListenerPids 已移除（本檔不再自行解析 netstat）。
+    //替身為 spawnSync 形（見 test/tools/portPidsFake.mjs）；Windows：netstat 查無或失敗再以 Get-NetTCPConnection 確認，其查無才判無人。
+    describe('listenerPids（spawnSync 形替身；netstat → Get-NetTCPConnection）', function() {
 
-        it('IPv4 與 IPv6 之監聽列皆取到，同一 PID 去重', function() {
-            //後端以 :: 雙堆疊監聽（2026-09-27 實測 EADDRINUSE 訊息為 :::port），須涵蓋 0.0.0.0:port 與 [::]:port
-            assert.deepStrictEqual(fn('parseListenerPids')(NETSTAT, 11108), ['15816'])
+        //以替身執行並回傳 { pids, calls }；預設 platform 為 win32
+        let run = (port, outs, opt = {}) => {
+            let calls = []
+            let pids = fn('listenerPids')(port, { exec: fakeExec(outs, calls), platform: 'win32', ...opt })
+            return { pids, calls, srcs: calls.map((c) => c.src) }
+        }
+
+        it('LP01 win32：netstat 有列即採用（字串陣列），只查 netstat；指令為 netstat -ano（不加 -p TCP）且帶逾時', function() {
+            let { pids, calls, srcs } = run(11108, { netstat: ok(NETSTAT) })
+            assert.deepStrictEqual(pids, ['15816'])
+            assert.strictEqual(typeof pids[0], 'string', 'PID 為字串（harness 以 String(pid) 比對）')
+            assert.deepStrictEqual(srcs, ['netstat'])
+            assert.deepStrictEqual(calls[0].args, ['-ano'])
+            assert.ok(calls[0].timeout > 0, '子指令須帶 timeout（exit 處理器內卡住會使行程無法結束）')
         })
 
-        it('外部位址為 :port 之連線列、其他 port、UDP 列皆不算', function() {
-            let pids = fn('parseListenerPids')(NETSTAT, 11108)
+        it('LP02 IPv4 與 IPv6 之監聽列皆取到、同一 PID 去重；外部位址為 :port 之連線列（client 端）、其他 port、UDP 列皆不算', function() {
+            //後端以 :: 雙堆疊監聽（2026-09-27 實測 EADDRINUSE 訊息為 :::port），須涵蓋 0.0.0.0:port 與 [::]:port
+            let { pids } = run(11108, { netstat: ok(NETSTAT) })
+            assert.deepStrictEqual(pids, ['15816'])
             assert.ok(!pids.includes('3333'), '外部位址 :11108 之連線列（client 端）不可算')
             assert.ok(!pids.includes('2222'), ':21108 不可算')
             assert.ok(!pids.includes('5555'), 'UDP 列不可算')
         })
 
-        it('IPv6 迴路位址、zone id、在地化狀態字（以外部位址判定監聽）皆取得到', function() {
-            assert.deepStrictEqual(fn('parseListenerPids')(NETSTAT, 8091), ['4444'])
-            assert.deepStrictEqual(fn('parseListenerPids')(NETSTAT, 9100), ['6666'])
-            assert.deepStrictEqual(fn('parseListenerPids')(NETSTAT, 9200), ['7777'], '狀態字被在地化（ABHÖREN）時仍以外部位址 0.0.0.0:0 判定為監聽')
+        it('LP03 IPv6 迴路位址、zone id、在地化狀態字（不依狀態欄）皆取得到', function() {
+            assert.deepStrictEqual(run(8091, { netstat: ok(NETSTAT) }).pids, ['4444'])
+            assert.deepStrictEqual(run(9100, { netstat: ok(NETSTAT) }).pids, ['6666'])
+            assert.deepStrictEqual(run(9200, { netstat: ok(NETSTAT) }).pids, ['7777'], '狀態字被在地化（ABHÖREN）時仍以遠端萬用位址判定為監聽')
         })
 
-        it('在地化表頭、空字串、undefined 回 []', function() {
-            assert.deepStrictEqual(fn('parseListenerPids')(NETSTAT, 9999), [])
-            assert.deepStrictEqual(fn('parseListenerPids')('', 11108), [])
-            assert.deepStrictEqual(fn('parseListenerPids')(undefined, 11108), [])
+        it('LP04 對外連線之狀態錯置為 LISTENING 不得誤判為監聽（遠端為真實位址）；兩路皆查無則 []', function() {
+            //本機實測（Windows 26300）：對外連線被標成 LISTENING；舊碼以「狀態為 LISTENING」或條件把其 PID（7000）當成該 port 之監聽者
+            let wrong = row('TCP', '192.168.1.10:50000', '140.82.112.3:443', 'LISTENING', '7000')
+            let r1 = run(50000, { netstat: ok(ns([...BG, wrong])), powershell: ok(ps([])) })
+            assert.deepStrictEqual(r1.pids, [], 'netstat 之錯置列不算；其查無不採信，續查 Get-NetTCPConnection，其查無才判無人')
+            assert.deepStrictEqual(r1.srcs, ['netstat', 'powershell'])
+            //Get-NetTCPConnection 亦回報該連線列（遠端為真實位址、非萬用）：同樣不算
+            let r2 = run(50000, { netstat: ok(ns([...BG, wrong])), powershell: ok(ps([[50000, '140.82.112.3', 443, 7000]])) })
+            assert.deepStrictEqual(r2.pids, [])
+            assert.ok(!fn('isOwnedBy')(r2.pids, 7000), '錯置列之 PID 不得被當成自建行程之監聽')
         })
 
-    })
-
-
-    // ── listenerPids（無人回 []、工具不可用回 null，兩者須可區分）──────────────────────────
-    describe('listenerPids', function() {
-
-        it('win32：以 netstat -ano（不加 -p TCP）取得並解析，且帶逾時', function() {
-            let opts = []
-            let { exec, calls } = makeExec((cmd, opt) => { opts.push(opt); return NETSTAT })
-            assert.deepStrictEqual(fn('listenerPids')(11108, { exec, platform: 'win32' }), ['15816'])
-            assert.deepStrictEqual(calls, ['netstat -ano'])
-            assert.ok(opts[0].timeout > 0, 'execSync 須帶 timeout（exit 處理器內卡住會使行程無法結束）')
+        it('LP05 netstat 漏列而 Get-NetTCPConnection 有 → 取後者（本機實測：新起之監聽，netstat 整列不列）', function() {
+            let { pids, srcs } = run(11108, { netstat: ok(ns(BG)), powershell: ok(ps([[11108, '0.0.0.0', 0, 15816]])) })
+            assert.deepStrictEqual(pids, ['15816'])
+            assert.deepStrictEqual(srcs, ['netstat', 'powershell'])
+            //netstat 指令失敗（不存在）者同樣轉查
+            assert.deepStrictEqual(run(11108, { netstat: err('ENOENT'), powershell: ok(ps([[11108, '::', 0, 15816]])) }).pids, ['15816'])
         })
 
-        it('win32：netstat 失敗回 null（非 []）', function() {
-            let { exec } = makeExec(() => { throw new Error('ENOENT') })
-            assert.strictEqual(fn('listenerPids')(11108, { exec, platform: 'win32' }), null)
+        it('LP06 netstat 與 Get-NetTCPConnection 皆查無才回 []（已確認無人）', function() {
+            let { pids, srcs } = run(11108, { netstat: ok(ns(BG)), powershell: ok(ps([])) })
+            assert.deepStrictEqual(pids, [])
+            assert.deepStrictEqual(srcs, ['netstat', 'powershell'])
         })
 
-        it('posix：lsof 輸出之 PID 去重；exit 1（查無）回 []，其他失敗回 null', function() {
-            let { exec, calls } = makeExec(() => '123\n456\n123\n')
-            assert.deepStrictEqual(fn('listenerPids')(11108, { exec, platform: 'linux' }), ['123', '456'])
-            assert.strictEqual(calls[0], 'lsof -nP -iTCP:11108 -sTCP:LISTEN -t')
-            let e1 = Object.assign(new Error('exit 1'), { status: 1 })
-            let e127 = Object.assign(new Error('not found'), { status: 127 })
-            assert.deepStrictEqual(fn('listenerPids')(11108, { exec: () => { throw e1 }, platform: 'linux' }), [])
-            assert.strictEqual(fn('listenerPids')(11108, { exec: () => { throw e127 }, platform: 'linux' }), null)
+        it('LP07 useBoth：兩路取聯集（身分確認用）；預設 netstat 有列即不再查 Get-NetTCPConnection，可能只見部分監聽者', function() {
+            //netstat 只列自建者（15816），Get-NetTCPConnection 另見他者（9148 綁 ::）
+            let outs = { netstat: ok(NETSTAT), powershell: ok(ps([[11108, '0.0.0.0', 0, 15816], [11108, '::', 0, 9148]])) }
+            let dflt = run(11108, outs)
+            assert.deepStrictEqual(dflt.pids, ['15816'])
+            assert.deepStrictEqual(dflt.srcs, ['netstat'])
+            let both = run(11108, outs, { useBoth: true })
+            assert.deepStrictEqual(both.pids, ['9148', '15816'])
+            assert.deepStrictEqual(both.srcs, ['netstat', 'powershell'])
+            //harness 之身分確認（spawnOwn：isOwnedBy(listenerPids(port, { useBoth: true }), child.pid)）因此能看出他者
+            assert.strictEqual(fn('isOwnedBy')(dflt.pids, 15816), true, '預設只見 netstat 所列：誤判為恰為自建')
+            assert.strictEqual(fn('isOwnedBy')(both.pids, 15816), false, 'useBoth 見到他者：判為非（或不只是）自建')
+        })
+
+        it('LP08 查詢失敗回 null（非 []）：兩路皆失敗、netstat 查無而 Get-NetTCPConnection 失敗、useBoth 下 Get-NetTCPConnection 失敗（不以 netstat 之部分結果代替）', function() {
+            assert.strictEqual(run(11108, { netstat: err('ENOENT'), powershell: err('ENOENT') }).pids, null)
+            assert.strictEqual(run(11108, { netstat: ok(ns(BG)), powershell: err('ETIMEDOUT') }).pids, null)
+            assert.strictEqual(run(11108, { netstat: ok(NETSTAT), powershell: err('ETIMEDOUT') }, { useBoth: true }).pids, null)
+            assert.strictEqual(run(11108, { netstat: ok(ns(BG)), powershell: ok('', 3) }).pids, null, 'PowerShell 離開碼非 0')
+            assert.strictEqual(fn('listenerPids')('abc', { exec: fakeExec({}, []), platform: 'win32' }), null, 'port 不合法')
+        })
+
+        it('LP09 posix：lsof 輸出之 PID 去重；離開碼 1（查無）回 []，其他失敗回 null', function() {
+            let a = run(11108, { lsof: ok('123\n456\n123\n') }, { platform: 'linux' })
+            assert.deepStrictEqual(a.pids, ['123', '456'])
+            assert.deepStrictEqual(a.srcs, ['lsof'])
+            assert.deepStrictEqual(a.calls[0].args, ['-nP', '-iTCP:11108', '-sTCP:LISTEN', '-t'])
+            assert.deepStrictEqual(run(11108, { lsof: ok('', 1) }, { platform: 'linux' }).pids, [])
+            assert.strictEqual(run(11108, { lsof: ok('', 127) }, { platform: 'linux' }).pids, null)
+            assert.strictEqual(run(11108, { lsof: err('ENOENT') }, { platform: 'linux' }).pids, null)
+        })
+
+        it('LP10 timeout 透傳至每個子指令（exit／signal 處理器內給較短逾時）', function() {
+            let { calls } = run(11108, { netstat: ok(ns(BG)), powershell: ok(ps([])) }, { timeout: 5000 })
+            assert.deepStrictEqual(calls.map((c) => c.timeout), [5000, 5000])
+        })
+
+        it('LP11 parseListenerPids 已移除：harnessProc 與 e2eLib 皆不再匯出（不得自行解析 netstat）', async function() {
+            fn('listenerPids') //確認模組已載入
+            assert.strictEqual(m.parseListenerPids, undefined)
+            let lib = await import('./tools/e2eLib.mjs')
+            assert.strictEqual(lib.parseListenerPids, undefined)
+            assert.strictEqual(typeof lib.listenerPids, 'function')
+        })
+
+        it('LP12 真實查詢（Windows）：自起之 127.0.0.1 監聽，useBoth 連續 3 次皆查得到本行程；關閉後 []', async function() {
+            //重現修前紅之情境：舊碼只看 netstat，新起之監聽常被漏列（本機實測 5 次中 2～5 次回 []，見 mig-task3 報告）
+            if (process.platform !== 'win32') { this.skip() }
+            let srv = net.createServer((s) => s.destroy())
+            await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+            let port = srv.address().port
+            try {
+                for (let i = 0; i < 3; i++) {
+                    assert.deepStrictEqual(fn('listenerPids')(port, { useBoth: true }), [String(process.pid)], `第 ${i + 1} 次`)
+                }
+            }
+            finally {
+                await new Promise((r) => srv.close(r))
+            }
+            assert.deepStrictEqual(fn('listenerPids')(port, { useBoth: true }), [], '關閉後已確認無人')
         })
 
     })

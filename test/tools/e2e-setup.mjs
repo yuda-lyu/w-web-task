@@ -161,7 +161,7 @@ const harness = createHarness({
     spawnFrontend,
     runSeed,
     httpOk,
-    listenerPids: (port) => listenerPids(port),
+    listenerPids: (port, opt) => listenerPids(port, opt), //opt 透傳（useBoth、timeout；見 harnessProc.mjs 檔頭）
     isPortListening: (port) => isPortListening(port),
     killOwnTree: (child) => killOwnTree(child),
     waitChildExit,

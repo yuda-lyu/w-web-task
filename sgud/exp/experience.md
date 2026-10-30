@@ -4,89 +4,7 @@
 
 體例: 每一事件一節, 標題附絕對日期; 內容以 徵狀 → 成因(附 `file:line` 或實測)→ 判別 → 教訓 為序. 規則本身記於 `sgud/rule/rulebook.md`, 處理流程記於 `sgud/proc/process.md`, 決策記於 `spec/設計要點與取捨.md`.
 
-## 權杖外洩修正(2026-09-25, D15; 四 repo 方案見 w-web-sso ADR-068)
-
-- **範圍**: 四個注入函數(`getUserByToken` / `verifyClientUser` / `verifyAppUser` / 選填 `getUserById`; 第四個於 2026-10-14 隨 w-serv-orm 移除, 改於入口拒絕, 見下方 D17 一節)改經 `server/wrapInjected.mjs` 包裝(失敗只回自家 key)、印權杖改經 `server/maskLog.mjs`、`getUserIdByToken` 改 fail-closed; 新增 `unit-maskLog`(24)、`unit-wrapInjected`(16)、`api-tokenLeak`(10), 皆先紅後綠.
-- **紅燈要能重現外洩, 先備好夾具**: 本 repo 預設 `ssoAppToken` 空, 未知 token 只回 `{}`, 回應與 srLog 本來就不含秘密——直接跑新測試會「修正前即綠」. 須先在 `srv.mjs` 加測試權杖(`{token-for-reject}` 以舊版 sso helper 形狀之字串 reject、`{token-for-verify-throw}` 使 verify 系拋錯, 皆受 `NODE_ENV` 守門), 再對未改之 `server/` 跑紅.
-- **包裝與 fail-closed 必須成對**: 只加 `wrapInjected`(失敗 → `null`)而不改 `getUserIdByToken`, 會從「偶然 fail-closed(例外中斷)」變成「`userId=''` 照樣執行」(fail-open). 驗 fail-closed 之紅燈要用「查無」(回 `{}`)之 token.
-- **外部因素**: 驗證期間 e2e 一度 25 / 26(E2E-008 eng 之後端消失)——同機 w-web-perm 之測試框架重建種子時殺掉整台機器命令列含 `srv.mjs` 之 node; 不改碼、不放寬斷言, 重跑 26 / 26. 同型之「harness 越權殺行程」於 2026-09-27 被正式回報後, 本專案據以盤查並重寫自身 harness(下節).
-
-## e2e / api harness 行程所有權重寫(2026-09-27; 規則見 rulebook「e2e harness 行程所有權」)
-
-- **起因**: 業主轉述他 agent 記下之待修缺陷「e2e-setup.mjs 在重建種子資料時, 會殺掉整台機器所有 srv.mjs」, 要求查本專案是否也如此. 處理不是只查「殺全機」這一句, 而是把 harness 對行程之五類入口(啟動 / 沿用 / 重建種子 / 重啟 / 清理)兩個方向(越權殺他人 / 失職留殘留)全部列表盤查; 方案先對標 sso / perm / api 之既有作法, 經三方獨立複審後定案實作(own 政策: 只用自建、port 被佔即拋錯、跨行程互斥).
-- **殭屍後端使健康檢查假陽性**: `srv.mjs` 之 listen 失敗(EADDRINUSE)只印錯誤不退出(15 秒後仍存活), 且已持有 lmdb; 舊 harness 以「TCP 可連」判就緒, 而 port 其實由先前之實例回應. 教訓: 就緒須核對 LISTENING PID 屬自建 child, 並以輸出字樣判綁定失敗(`test/tools/harnessLifecycle.mjs:16-21`).
-- **lmdb 被持有時 rm 只刪一部分**: 對開著的 `./db` 執行 `rmSync(recursive, force)` 會 EPERM 但非全部失敗——實測某表整個被刪、其餘留存, 種子因此非 hermetic 卻只印警告照跑. 教訓: 整個目錄先 rename 移開(有人持有即整體失敗、不動任何檔), 移不開就拋錯, 不警告續跑.
-- **非同步殺行程後立即退出會留孫行程**: `spawn('cmd', ['/c', 'taskkill', …])` 為非同步, exit / SIGINT 路徑殺完即 `process.exit()`, 前端孫行程(npm → vue-cli-service)4 秒後仍監聽. 教訓: 結束路徑之殺行程一律同步並回驗.
-- **vue-cli-service 三個判讀陷阱**: ①portfinder 見 port 被佔會靜默改綁下一個空 port, 實際 port 以輸出之 `Local: http://…:<port>/` 為準; ②編譯失敗(`Failed to compile`)時 dev server 照樣回應 HTTP, 就緒須等 `App running at` / `Compiled with N warning`(本專案有 1 個 warning, 不會出現 `Compiled successfully`); ③以 `spawn('node')` 經 PATH 會受 shim 影響 PID 與版本, 改用 `process.execPath` 且直接跑 `vue-cli-service.js`(不經 npm / shell), 使前端為本行程之直接子行程.
-
-## e2e 改用 w-web-sso srcPack 與全量重產(2026-09-28)
-
-- **徵狀(盤點發現)**: 本專案 e2e 為裸 `chromium.launch`(無確定性渲染旗標)、無 `strict` 截圖、紅框為 DOM 注入之 position:fixed 框(技能 §8.3 / §8.4 缺口); `waitUntilExist` 有 6 處(E2E-008 / 012)傳入 async 判斷式.
-- **async 判斷式從未等待**: `page.waitForFunction` 把 async 函數回傳之 Promise 當 truthy, 立即放行——這 6 處自寫成以來實際沒有等到後端狀態. srcPack `waitUntilExist` 改以 `AsyncFunction` 判別、逐次 `page.evaluate` 輪詢後才真正生效. 教訓: 等待 helper 要測「條件不成立時確實會等」, 不能只測成立時會過.
-- **紅框框進大片空白**: 全量重產後審圖發現頻道樹、時間軸、後台表格之框為「整個面板 / 整個表格外框」, 列少時框進大片空白(技能 §7.3-2); 改以 `itemsUnionBox`(樹之 `.tnode, .chan`、時間軸之 `.day, .msg`)與 `gridContentBox`(標頭＋可見資料列)框實際內容. 此類缺陷促成 srcPack `auditBoxes` 之空白框掃描; 複掃本專案 30 張無框 0, `cut` / `touch` 旗標經逐類目視皆為元素本身貼框.
-- **「每步兩張」第 1 期**: E2E-002 / 004 / 005 改點擊前(`-1-click-*`)與點擊後(`-2-*`)兩張, 舊鍵圖刪除; 第 2 期見 rulebook「已知缺口」.
-
-## 搬入 `test/tools/` 後臨時資料落錯位置(2026-09-28 搬移, 2026-09-29 修正)
-
-- **徵狀**: `npm test` 跑完後出現 `test/tools/_tmp/`(未 gitignore, `git status` 可見).
-- **成因**: `e2e-setup.mjs` 由 `test/` 搬入 `test/tools/` 時, `TMP_DIR` 沿用 `join(__dir, '_tmp')`, 實際落點變成 `test/tools/_tmp`; `seed-archived-task.mjs` 之相對 import 同樣少一層.
-- **修正**: `TMP_DIR = join(__dir, '..', '_tmp')`(`e2e-setup.mjs:63`)、seed 腳本 import 改 `../../`; 再跑 `npm test` 確認 `test/tools/_tmp` 不再出現.
-- **教訓**: 搬移檔案時, 所有以 `__dir` / `import.meta.url` 組出之路徑與相對 import 都要逐一重算並實跑確認落點(全域 §11.4); 另 `git grep` 不搜未追蹤之檔, 搬移後未提交前以 Grep 工具盤查.
-
-## 固定等待盤點(2026-09-29)
-
-- srcPack `tools/auditWaits.mjs` 掃出本專案 26 處 `waitForTimeout`(A17 / L2 / D3 / R1 / E3; 2026-09-29 重跑相同), 逐一判讀: A 類為偵測後之 settle、L 為輪詢間隔、E 三處為 ag-grid 編輯器掛載 settle、Enter 提交後 settle、`openApp` 遇 context destroyed 之重試前等待——前一動作到預期狀態之間皆已有偵測或屬技能 §4.4 允許之 settle, 不需改.
-
-## 後台任務詳情面板開啟時整頁溢出 25px(2026-09-28 觀察, 2026-09-29 修正)
-
-- **徵狀**: E2E-012 標準圖(兩語系)頂端之 rail 圖示與頁面標題被裁、底部出現 25px 白條——整頁被捲動 25px; 其餘 28 張 rail 底部皆無白條(掃描 rail x=10 之深色最低列).
-- **處置之錯**: 2026-09-28 審圖時已看到此現象, 卻記為「觀察, 本輪不改產品」. 這是使用者可見之缺陷(照圖操作之讀者會看到裁切與白條, 實機則出現整頁捲軸), 依業主「潛在缺陷都修、該改圖的就改」應當輪修正; 不得以「不在本輪範圍」擱置.
-- **成因**: `src/components/LayoutContentTasks.vue:119`(修正後 `:120`)詳情面板以計算值 `detailHeight`(＝面板總高 − 頭部 − 清單)設 `height`, 同一 style 又帶 `padding:12px 18px` 與 `border-top:1px`, 且未設 `box-sizing:border-box`(全站無全域 box-sizing)——實際高度多出 12＋12＋1＝25px, 與溢出量相等. 同型問題本 repo 已修過兩處(`Composer.vue:513`、`ChannelTree.vue:315` 之 `box-sizing: border-box`).
-- **實測(探測腳本, 以 harness 起測試實例, 1440×900 / 1280×720 / 1024×768 / 390×844 × 三筆任務)**: 修正前面板設定高 389px、實高 414px、底緣 925 > 視窗 900(各尺寸皆多 25px; 窄版 390×844 底緣 869); 文件本身不捲動(`scrollHeight − clientHeight` = 0), 故一般使用下是**面板內捲動區最末 25px 永遠看不到**; e2e 之紅框 helper 對面板 `scrollIntoView` 時把隱藏溢出之容器捲了 25px, 才在圖上呈現 rail 被裁與底部白條. 修正後 12 個狀態之實高皆等於設定高、底緣皆等於視窗高.
-- **修正與改圖**: `LayoutContentTasks.vue` 詳情面板之 style 補 `box-sizing:border-box`; 以 `--baseline --names E2E-012` 重產兩語系(其餘 28 張 mtime 未動). 新舊圖比對: 新圖面板以上區域與舊圖平移 25px 後, 679,680 像素中僅 5 點不同(皆為舊圖被裁切之 logo 邊緣列), 即舊圖之差異純為整頁被捲; 新圖 rail 延伸到底、頁首完整、紅框恰框整個面板(505～896)、兩語系框位相同.
-- **判別**: 以計算高度排版之容器, 只要 style 同時有 padding / border, 就要 `box-sizing:border-box`; 盤點指令 `git grep -n 'height:\${' -- src`, 逐一看同一 style 是否帶 padding / border(2026-09-29 全站只有此一處). 另: 文件層 `scrollHeight` 為 0 不代表沒溢出——`overflow:hidden` 之祖先會把溢出藏起來, 要量元素底緣是否超出視窗.
-
-## E2E-007 補圖與假時鐘(2026-09-29, 業主裁示補圖)
-
-- **原載理由拆開看**: E2E-007 原為語意-only, 理由兩條——「送出後訊息帶即時時間戳」與「已消毒與未消毒之像素無從區辨」. 前者不是不拍之理由(技能 §7.1: 非決定性以假時鐘處理); 後者仍成立, 但只代表「安全性要由語意斷言判定」, 不代表手冊不需要圖. 改為三張: 輸入前(框輸入框整顆)、輸入後兼作送出前(框發訊區)、送出後(框新訊息).
-- **假時鐘放在寫入函數層**: 追寫入點——畫面時間欄全由本專案經 `wsemi/src/nowms2str.mjs` 寫入(`server/procCore.mjs`、`src/schema/tables/*.mjs`), 後端依賴套件原始碼無 `new Date()`. 以 Node 模組解析 hook(`node --import test/tools/fakeNow/register.mjs`, 內以 `module.register` 註冊)只把「本專案 `server/` 與 `src/` 所 import 之該模組」導向替身, 比攔全域 `Date` 範圍精準: srLog 時間與套件內部照常; 替身讀標記檔決定是否固定, 可逐案開啟.
-- **hook 之比對細節**: parentURL 為 percent-encoded 之 file URL(路徑含中文時 `開源` 會編碼), 比對前綴以 `pathToFileURL` 產生並一律轉小寫(磁碟機代號大小寫); 替身自身 import 真實版時 parentURL 在 `test/tools/fakeNow/`, 不會被再導向.
-- **標記檔之生命週期**: 開啟於送出前、`finally` 關閉; 另於 `startServersOnce()` 與 `reseedBackend()` 開頭再關一次——前次被中斷之執行可能留下標記檔(harness 目錄只在正常收尾時刪), 不關就會讓 api 測試與後續案例意外吃到固定時間.
-- **就緒訊號兼驗假時鐘**: 送出後等「時間軸出現錨點字串」再截圖; hook 若失效, 此等待逾時即拋錯, 不會把真實時間凍進標準圖.
-
-## 按鈕雙擊防護補齊(2026-09-29, D16; 四專案同一原則見 w-web-sso ADR-074)
-
-- **「前端層已擋雙擊」之舊判斷不成立**: rulebook 原記「前端層(promiseUnlock + loading)已擋雙擊」, 但 handler 第一行即 `pm.resolve()` 使按鈕鎖立即解除, 全頁 loading 與確認 / 結果框又不搶焦點, 焦點留在按鈕時鍵盤連按照樣送出(w-web-sso 以同一元件庫實測). 教訓: 「某層已擋」須以滑鼠與鍵盤兩種輸入各驗一次, 不以滑鼠雙擊被遮罩擋下就推論全擋.
-- **cacheSt 不可建於 procCore**: wsemi `cacheSt()` 內含未 unref 之 `setInterval`(TTL 偵測), 建於 procCore 會使 unit 測試建構後 mocha 不結束(本專案 `test` 無 `--exit`), 且違反 D12「procCore 不放 timer」. 改於 `WWebTask.mjs` 建立後經 deps 注入(同 kmx); unit 測試自建並於 `after` 呼叫 `clear()`.
-- **同一列之兩個「確保存在」路徑要共用同一把鎖**: `saveChannel` 確保主責 agent 成員列與 `ackChannel` 缺列 insert 寫同一 (channelId, memberId) 列; 各自加鎖(不同 key)仍會並行各建一列. 以「修正前等價依賴」(kmx 不序列化、lockSave 直接執行)重跑 6 個並行情境, 全部重複建列(2 列)且無一被拒——含「saveChannel 設 agentId 與該 agent 之 ack 並行」, 故採共用 key `channelMember:<channelId>:<memberId>`.
-- **並行單元測試要結果確定**: 兩次呼叫於同一同步區段發起(`Promise.allSettled([f(), f()])`), lockSave 之占位於呼叫當下同步取得, 故第 2 次必被拒; 「先 select 後 insert」之競態以慢速 mock 表(每次存取讓出 5ms)使窗口必定重疊, 未序列化即重複建列. 如此先紅後綠不依賴機器快慢.
-- **unit-procCore 須以專案根為 cwd**: procCore 建構時以 cwd 相對路徑確保 `./dbf`; 自他處(如姊妹專案)以絕對路徑跑 mocha 會在該處建出 `dbf/`. 以 `spawnSync(..., { cwd: 專案根 })` 執行, 不用 cd.
-- **訊息框單例**: `Common/CheckYesNo.vue` 與 `Common/CheckYes.vue` 皆為單例, 修正前 `show()` 直接覆寫 pm, 被取代之流程永不 settle. WConfirm 以 header slot 覆寫掉 WDialog 預設標頭(無關閉鈕)、`isModal` 預設 true(點背景只振動)、無 ESC 處理, 故單一框之 pm 只由按鈕 settle; 但訊息框開啟中若另一流程開框(鍵盤 Enter 可觸發背後另一按鈕), 前一流程即永久等待、其 runSubmit 占位永不釋放. 教訓: 流程狀態涵蓋到對話框關閉時, 單例對話框必須在 `show()` 開頭先 settle 前一個等待者(結果框視同按確定、確認框視同選否, 2026-09-29 與 w-web-sso 同步修正); 「單一框只由按鈕 settle」不足以推論「包進 runSubmit 不會懸置」, 要把「框被另一框取代」也列入終止路徑.
-
-## 相依升版使後端無法啟動; 資料通道授權閘與 w-serv-orm 三鍵清理(2026-10-14, D17)
-
-- **徵狀**: 主控更新自有相依(w-serv-hapi 1.1.6、w-serv-webdata 1.1.12、w-serv-orm 1.1.10 等)後 `npm test` 181 passing / 6 failing, 6 筆皆為 api 四檔與 e2e 兩語系之 `before all`: 測試後端起不來, 73 案未執行.
-- **成因**: w-serv-webdata 1.1.7 起 `useDbOrm: true` 時 `authorizeExec` 必填, w-serv-hapi 1.1.6 起整包同步轉交 → WWebTask 建構即拋 `invalid opt.authorizeExec when useDbOrm=true`. 同輪之 w-serv-orm 三鍵與之無關; 由 w-serv-orm 端寫之建議書只看 w-serv-orm, 判「建構照常」只對 w-serv-orm 成立.
-- **判別**: harness 錯誤附帶之後端輸出即有拋錯堆疊(套件層級一目了然); 升版查核要用真實入口實際啟動, 只比對我方傳入之 opt 鍵看不到下游新增之必填鍵(process「自有套件升級之查核」).
-- **遮蔽之失敗**: 修正前無從得知被阻斷之 73 案是否另有失敗. 以修正原型實跑全套: 原型放 `./tmp/`(由現行碼以腳本產生, 相對 import 改指真實模組), 以 `NODE_OPTIONS=--import=<註冊檔>` 之模組解析 hook 只把 `srv.mjs` 所 import 之 `./server/WWebTask.mjs` 導向原型, harness 起之後端經 env 繼承同一 hook, 假時鐘 hook 照常作用. 結果 254 / 254, 確認無其他遮蔽之失敗——不改受追蹤檔即可回答「修好阻斷後還會不會壞」.
-- **資料通道之兩個授權缺口(以真實 WServHapiClient 探針實證)**: ①表操作開 insert / save / del, 已認證者可直寫 / 直刪 channels、channelMembers, 繞過同表 kpFunExt 路徑之 D16 lockSave、確保成員列 kmx 與 D7 游標身分(直刪頻道後成員列成孤兒); 前端與 agent 從不使用直寫. ②連線閘只認證, 被 verifyClientUser 拒絕者 UI 進不去, 卻可經資料通道呼叫全部 kpFunExt(含寫入). 修正: 表操作只開 select + `server/authorizeExec.mjs`; 連線閘於 getTokenUser 之後呼叫已包裝之 verifyClientUser. 教訓: 「授權屬套件使用者責任」之註解要對照部署方提供之授權函數**實際作用於哪些入口**; 同一張表有兩條寫入路徑時, 規則(占位、鎖、身分)必須兩條都有, 否則關掉其一.
-- **修前紅燈之取得**: 現行碼因阻斷起不來, api 測試之紅燈成因不對; 以 B2(authorizeExec 恆 true、methodsExec 不變 = 升版前之授權面)為修前對照之暫態, 快照至 `./tmp/run03/s1/` 以 hook 執行, 工作樹同時推進至最終態, 不需在受追蹤檔留中間態.
-- **C1 之連帶**: verifyClientUser 改為每次資料通道請求皆呼叫(前端每 2 秒輪詢), 參考入口 `srv.mjs` 原於其內 `console.log` 使用者物件 → 每 2 秒洗版並印個資; 比照 w-web-perm 之 `srv.mjs` 註解掉(verifyAppUser 對稱同改).
-- **建構失敗之副作用**: 原轉交給 WServOrm 拒絕時 srLog 已初始化(pino transport worker), 行程結束前建出 log 目錄與檔、並多印一次 `WServOrm init failed`; 改於入口 `checkOptRemoved` 後零副作用. 單元測試以子行程建構失敗後檢查工作目錄為空(`unit-optRemoved` UNIT-OR-019), 修前紅、修後綠.
-- **打包產物**: 以 w-package-tools 之 rollupFile 打包至 `./tmp` 後 `require` 即拋 TDZ(`Cannot access '…' before initialization`), 已發布之 1.0.32 dist 亦然; 成因在 w-syslog(`src/WSyslog.mjs` 頂層宣告 `__filename` 遮蔽 rollup 之 `import.meta.url` CJS 墊片), 已轉 w-syslog 另案. (2026-10-14 補記: w-syslog 1.0.33 已修正, 見下「dist 冒煙」.)
-- **工具**: TaskStop 停止背景 bash 時, 內層 `bash <script>.sh` 可能未被終止(停止後仍續寫 log); 以 `Get-CimInstance Win32_Process` 依命令列找出 PID 後 `taskkill /F /T` 並回驗. 持測試鎖之腳本須有等待上限與 EXIT / INT / TERM 時釋放自己之鎖.
-- **測試鎖之排程**(2026-10-14; 同日稍後改為兩槽 `web-tests` / `web-tests-b` 取其一, 腳本依序試取): 多個 w-web-* 套件共用測試鎖時, 不開瀏覽器之 unit / api 不必持鎖(派工規則, 同日更正), 先跑完取得修前紅 / 修後綠; 需持鎖者(全套 `npm test`、真實入口 + 真瀏覽器驗收)串成一條背景鏈, 各一取一放, 鎖空出時兩項約 7.5 分鐘完成. 更正前之規則為所有測試指令皆持鎖, 他套件持鎖約 1.5 小時(03:40–05:19)期間本套件之驗證全數停擺.
-- **以 dev server 驗收之非系統管理者導向**: 非系統管理者於 dev server(8080)下被導向字面字串 `{urlRedirect}`——`public/index.html:20` 為樣板, 只在後端提供已建置頁面時替換(`server/WWebTask.mjs:459`); 既有行為, 非回歸. 判「進不了站」看頻道樹不可見與 `/api/getUserByToken` 回 `errUserNoPermission`, 不看導向網址.
-
-## 發布前升級輪: dist 冒煙與驗收之計時陷阱(2026-10-14, w-syslog 1.0.33 等)
-
-- **dist 冒煙**(`tmp/run05/dist-build.mjs`、`dist-smoke-run.mjs`、`dist-smoke-child.mjs`, 用畢可刪, 作法如下): ①讀 `toolg/gDistRollup.mjs` 原文, 只把 `let fdTar = './dist'` 換成 `./tmp/...`(斷言恰一處)另存後以 node 執行, 設定與發布時完全相同; ②子行程以暫存資料夾為 cwd(WWebTask 建構會寫 cwd 相對之 `dist/index.html`、db、dbf、uploadTemp、logs), `require` 產物後比照 `srv.mjs` 以相對 `./db`、`./logs` 建構; ③送會寫 log 之請求(空權杖與非系統管理者之資料通道、登入檢查、kpFunExt 讀寫、函數清單、直寫), 輪詢讀 log 檔至預期記錄齊備; ④WWebTask 無停止介面, 寫完結果檔即 `process.exit(0)`; 父行程回驗子行程已不存在、埠已釋放. 結果 19 / 19.
-- **產物經 terser 壓縮**: 字串標記要容許引號與空白之改寫(`err:"errUserNoPermission"`), 以原始碼寫法比對會誤判為「不含」. rollup 對 `module`、`http`、`worker_threads` 警告後視為外部模組, Node 下可用(w-syslog 修正報告之建議亦為可不加).
-- **驗收之計時陷阱**: 以 repo 之 `settings.json`(`archiveAfterDays: 30`)起真實入口, 種子訊息時間戳固定為 2026-01-01(`g.initialData.mjs:21`), 後端啟動 30 秒後首次封存(`server/WWebTask.mjs:264`)即把歡迎訊息搬冷表. run04 前端編譯 5 秒、30 秒內做完而通過; run05 相依變動使 webpack 快取失效、前端重編 25 秒, 點頻道時已在封存之後 → 等歡迎訊息逾時(後端 `getMessages` 全成功、無任何錯誤). 驗收比照 harness(`test/tools/e2e-settings.json`)設 `archiveAfterDays: 0`. 教訓: 驗收腳本之通過不能依賴「做得夠快」; 先比對兩輪 log 之事件計數(本例多一筆 `archiveSweep`)即可定位.
-
-## 專案文件混入姊妹專案範本內容(2026-09-27 發現)
-
-- 舊版專案 `CLAUDE.md` 之「按鈕雙擊防護」附 w-web-sso 之具體範例(`procCore.mjs:79` 建 kmx、`:85` 建 `cacheSt`、key 為 `adminResetUserPassword` 等)與「Email 模板存放」整節(`server/template/…`), 本 repo 皆不存在(本專案 kmx 建於 `server/WWebTask.mjs:226`, key 為 `task:<id>` / `postMessage:<channelId>`; 無寄信流程). 教訓: 讀到專案文件之具體 `file:line`、函數名或目錄, 先核對本 repo 是否真的存在, 不因「寫在專案文件裡」就當事實.
+(2026-10-29 依全域 §14 過長整理: 2026-09-25 至 2026-10-14 之舊節〔權杖外洩修正、e2e harness 行程所有權、srcPack 全量重產、固定等待盤點、詳情面板溢出、E2E-007 補圖、按鈕雙擊防護、相依升版使後端無法啟動、發布前升級輪、專案文件混入姊妹範本〕逐字抽出至 `sgud/exp/experience_20261029.md`, 需要時再調閱.)
 
 ## 多人同時編輯第二波實作(2026-10-23, task-run01; 規則見 `rulebook_concurrency.md`, 決策見 `spec/設計要點與取捨.md` D18)
 
@@ -145,6 +63,37 @@
 - **變異驗證**: 14 個單點變異(`tmp/task-run01/mutate.mjs`: 以 Write 寫執行器、每變異後立即還原、最後 `finally` 再還原)全數被抓到, 含 M1(不傳 `funLog` = 修前)、M2(`detail` 外洩)、M3(日誌寫入失敗不吞). 兩點教訓: ①M14(`funLog` 回傳 promise)在 OD-U-01 漏接 —— 該案以 `await spyConsole(...)` 取回傳值, `await` 會拆掉 promise; 測「回傳值型別」須直接呼叫, 由 OD-U-06 抓到; ②OD-U-05 初版「深度」斷言以 `JSON.stringify(...).length < 200` 判定, 對深度上限 3 → 30 的變異也綠(斷言空洞), 改成精確比對 `{ a: { b: '[...]' } }` 後才抓到 M11.
 - **失敗路徑要能正常呈現**: 初版 `detail` 替身之 Proxy 陷阱會拋錯, 外洩變異時 mocha 在第一個失敗後無摘要即結束(離開碼 0), 靠 quiet-run「離開碼 0 但未見測試摘要行」警告才發現; 替身陷阱改為只計數、回無害值.
 - **w-serv-orm 1.1.20 預設已不含個資, 但仍寫 console**: 只升版不足以「導入日誌」, 須自己接 `funLog`. 預設下寫入失敗之診斷: 拒收值(`failed to save data: id[...]`, 回傳契約)隨 reject 回呼叫端, 本套件之寫入走 `woItems` 時由 `procCore.runOps` 記 `err` key.
+
+## 診斷輸出遷移至 wsemi 共用模組(2026-10-29, mig-task, 排程第 161 項; 規則見 `rulebook_backend.md` R-ORMDIAG-01～06, 規格 `C:\opensrcOper\dspec\診斷輸出與遮罩.md`, 規則本體 wsemi R-DIAG-01)
+
+- **接線測試要跑「正式站點之運算式」, 不是測試內另寫的一份**: 自寫轉接檔刪除後, 站點只剩 `WWebTask.mjs` 一行 `{ funLog: genDiagFunLog((o) => srLog.warn(o)).funLog }`. 測試內自己 `genDiagFunLog(...)` 一份, 與站點脫鉤, 站點改壞(例如箭頭函數加大括號而丟掉 `srLog.warn` 回傳之 promise)測試仍綠. 作法: `test/tools/diagWiring.mjs` 讀 `WWebTask.mjs` 該行運算式、以該檔自己的 default import 求值(`new Function`), 單元測試、語料驅動、真實 w-serv-orm 三處共用; 運算式形狀不符即拋錯(`OD-S-01` 另釘原文)。該變異(`(o) => { srLog.warn(o) }`)由 OD-U-06、OD-W-01、語料 A04 抓到。
+- **修前紅要分「行為紅」與「結構紅」**: 對 HEAD 副本(`git archive HEAD server src` 解到 `./tmp/mig-task/head/`、覆上新測試與 `test/tools`; `node_modules` 沿目錄向上由專案根取得, 不需連結)跑新測試: 14 紅 / 18 綠。行為紅 4 條——OD-U-06、OD-W-01(HEAD 之 `srLog.warn` 回 rejected promise 成為未處理拒絕, 實測 2 筆)、OD-U-07(HEAD 於 `srLog` 缺 `warn` 時建構拋 `invalid srLog`, 屬已記載之 Breaking)、OD-U-09(HEAD 之 funLog 無 `noDetail`); 其餘為結構紅(語料 8 案因 HEAD 無 `.funLog` 運算式、OD-S-01 / 02 因舊檔存在), 不可當行為證據。api-ormDiag 4 案兩邊皆綠(行為對外不變, 屬迴歸守門)。
+- **本套件無「漏包 catch／誤包固定詞彙 reject／逐筆 err 未遮」可變異之站點**(沒有 `diag` 實例): 變異改打接線層——14 個(`tmp/mig-task/mutate.mjs`, 對專案複本逐一變異、不動本體; 事後以同一份檔留證據): 回傳 promise 被丟棄、不傳 funLog、detail 外洩、建構時固定 `srLog.warn`、等級 error / info、改事件名、另寫 console、漏 `.funLog`、丟 safe、寫入物件改 safe、safe 轉 JSON 字串、write 恆拋、label 加前綴, 全數被殺(0 存活), 且去掉 OD-S-01(運算式原文釘死)後仍各被行為測試殺死。M4(建構時固定 `srLog.warn`)只被 OD-U-10(換掉 `srLog.warn` 後記錄須進新函數)與 OD-U-07(`srLog` 為 `undefined` 時取值即拋)殺死; OD-U-06 之「事後換掉 `srLog.warn`」只斷言不拋、不斷言寫入去向, 推測殺不了(未單獨實測), 故補 OD-U-10。
+- **全套 e2e／api 在本機間歇性失敗, 成因在環境非本輪改動**(**2026-10-30 mig-task3 已解**: harness 改用 wsemi `execProcessPortPidsSync`, 見本檔〈harness 查埠〉節): `netstat -ano` 對監聽中之 socket 會間歇不列、或列為 `CLOSED`／`FIN_WAIT_1`、或留 PID 0 殘列; 實測 `tmp/mig-task/fe-probe.mjs`: 前端 dev server 輸出已見「App running」, 仍在 t=10s、15s 兩次查無 8091 之列, 於 t=20s 又出現。harness 之 `listenerPids` 因此回 `[]`, 報「port N 由 無人 監聽」(後端 11108 或前端 8091)、收尾報「port 11108 仍被 PID 0 System Idle Process 監聽」。同一案例未改碼重跑時敗時過(api-agent 全套中敗、單跑 17 passing), 屬不穩定: 依主控守則 15 以失敗率回報, 不放寬、不加長等待。
+- **背景化之探測指令被時限終止會留下殘留測試鎖**: 把常駐子行程之探測腳本(`runsrv.mjs`)包進 `quiet-run --lock` 並超過前景 120 秒, 工具移到背景後被終止, 鎖留在 `web-tests`, 其後的 `--lock` 指令白等 10m46s(quiet-run 印「殘留鎖」提示); 以 `quiet-run --release-stale --cwd <repo>`(只回收本套件且持有者已結束之鎖)回收。探測腳本自己要有上限(逾時即終止其子行程並 `process.exit`), 且探測用 `--timeout` 明給小於前景上限。
+- **`dist/` 不在 harness 根目錄**: 測試後端之工作目錄為 `test/_tmp/e2e-harness/root`, `pathStaticFiles='dist'` 相對該目錄, 故啟動輸出一律有 `invalid fpEntryIn … can not generate index.html`(被 catch, 不影響啟動); 看到此行不是失敗原因, 勿被它帶偏(本輪曾誤以為是第一次全套失敗之成因, 以隔離探測 `runsrv.mjs`〔有無 dist 皆存活 12 秒〕排除)。
+
+## 外來值遮罩出口(2026-10-30, mig-task2; 規則見 `rulebook_backend.md` R-ORMDIAG-06、07, 規格 `C:\opensrcOper\dspec\診斷輸出與遮罩.md` D3)
+
+- **url 要先分類再給 `getDiagSecrets`**: `getDiagSecrets({ urls: ['./db'] })` 會把 `./db`(及其百分比編碼)列入 **reject 清單**, 對外錯誤值裡的儲存路徑就被遮了(違 dspec Q3「對外錯誤值不遮儲存路徑」); lmdb、lowdb 的 `url` 是檔案位置, 連線字串才是網址. 實測探測 `tmp/mig-task2/probe-secrets.mjs`. 分類已有單一定義: `w-serv-orm/src/getDiagBrief.mjs` 的 `getUrlSecrets(url)`(含 `://` 或 `@` 者列網址, 其餘列路徑), 直接引用, 不另寫(D1); 本套件已有先例引用 `w-serv-orm/src/checkOptRemoved.mjs`. 以 `OM-F-02` 釘死「檔案位置不遮、憑證形態仍遮」.
+- **「上游已遮」會讓外來值出口測不到, 要找上游不介入的路徑**: w-serv-orm 對 `procOrm` / 資料通道 `kpExec` 的錯誤已改固定詞彙(`failed to select data`), 用「WOrm 替身拋含憑證 Error 再打 `channels.select`」永遠看不到洩漏. 但 `procCore` 直接取用 `woItems.<表>`(raw WOrm), w-serv-orm 不介入: 替身在 `files.select({ id })`、`tasks.select({ isActive:'y' })` 拋 Error 才會一路走到 `runApi`、`getFile`、`wrapErrLog`、封存掃描四個出口(`test/tools/ormLeakChild.mjs`). 這也是出口遮罩存在的理由: 上游版本不由本套件控制, 上游未遮時由本套件自己負責.
+- **裸密碼只有「秘密來源」遮得到**: 錯誤原文同時放三種形態(網址整串、`password=…`、裸密碼 `auth rejected for <密碼>`), 樣式規則只遮前兩種; 宣告漏掉 `secrets`(變異 G1)時只有裸密碼洩漏, 其餘形態照遮——若測試只放網址或 `password=` 形態, 這種漏宣告測不出來.
+- **站點全集用「呼叫行逐字固定」的結構測試守**(`OM-S-02`): 掃 `server/*.mjs` 去註解後含 `diag.err(` / `diag.mask(` 之行, 與固定的 8 行比對; 另以 `.message` 讀取與 `Promise.reject(err)` / `throw err` 的反向盤點(`OM-S-05`)守「新增外來值出口須先歸類」. 以秘密值恰等於某固定 key(如密碼 `errFileNotFound`)驗「固定詞彙不包」: 誤包即變 `***`(變異 P7、L2).
+- **持鎖 session 驅動器**: 測試鎖被他套件獨佔負載試驗占滿時排隊可達數小時; 先寫完全部測試、變異腳本與文件, 再以 `quiet-run --lock` 起一個 detached 驅動器(`tmp/mig-task2/session.mjs`), 取鎖後依 `plan/NN-*.json` 依序跑(新測試 → 全套 → 修前紅與變異), 指令檔可帶 `requires`(前段未綠不跑後段昂貴指令), 閒置逾時自行釋放. 排鎖等待期間可繼續改文件與補指令檔, 不必為每次修正重排.
+- **修前紅不能直接用 HEAD**: 本輪的前一狀態是「前一輪工作樹」(未提交), HEAD 比它更舊. 修前狀態以變異腳本的 `PRE` 變異還原(逆向套用本輪 11 處編輯並刪 `genDiag.mjs`), 並以 `git diff --no-index` 對 HEAD 驗證只差前一輪的 `genDiagFunLog` 改動(`procCore.mjs` 與 HEAD 逐字相同).
+- **兩層轉拋會互相補位, 測 `procCore` 轉拋站要隔離 `lockSave` 層**: `saveChannel` 等先經 `lockSave`(轉拋站 T3)再到 `guarded`(轉拋站 T1); 第一輪變異 P5(`guarded` 漏遮)只被結構測試殺死、行為測試全綠——因為 `lockSave` 那層把漏遮補上了. 作法: `mkEnv(diag, lockDiag)` 讓 `lockSave` 用不遮罩之替身 `passDiag`, 只剩 `procCore` 自己的站點起作用, P5 才被 OM-P-03、OM-P-09 殺死. 同理「固定詞彙不包」要在隔離下以「秘密恰等於該 key」才測得出誤包(OM-P-10). 變異結果的「被殺」要看是哪一類測試殺的: 全由 `OM-S-*` 結構測試殺死者(W8、P11)須明載「只有結構測試守」, 並說明為何行為測試無法觀察(WWebTask 層所有字面 reject 最終都經 mask-all 出口, 多包一次不可觀察).
+- **持鎖 session 的指令檔名必須 `^\d+-`**: 驅動器以 `/^\d+-.+\.json$/` 挑指令檔, `02b-…` 這種數字後接字母的檔名永不被挑中(空等數分鐘才發現); 插隊用 `021-…`(字典序介於 `02-` 與 `03-` 之間). `requires` 只認 `.done` 的 `code===0`, 改測試後重跑要同步改後段指令檔的 `requires`.
+- **成功路徑的假設要先看實際回傳**: OL-06 初版假設資料通道 `saveChannel` 回傳含列(名稱), 實際回 `{ n, nInserted, ok }`; 持鎖期間才發現, 損失一次重跑. 對照步驟之斷言前先在探測腳本確認回傳形狀.
+- **全套 e2e／api 之 harness 失敗仍在(2026-10-30 01:00 前後三次全套; 同日 mig-task3 已解, 見〈harness 查埠〉節)**: 每次 12 條 failing(9 條 `before all`「port 11108 由 無人 監聽」＋3 條其後 `after all`「fetch failed／ECONNREFUSED」), 其餘 403～404 passing 全綠; 單跑 `api-agent` 亦敗(前一輪單跑曾過). 屬主機層 `netstat -ano` 問題(監聽列不出現; 本輪 `netstat -ano | grep -c LISTENING` 僅 6 列, 3389／445／135 皆缺), 與本輪改動無關; 不放寬 harness、不重試到過.
+
+## harness 查埠(2026-10-30, mig-task3〔20261029002013〕; 規則見 `rulebook_test.md` R-HARNESS-PID-01～03)
+
+- **根因在「自己解析 netstat 並信任其查無」**: 本機 Windows 26300 的 `netstat -ano` 會漏列新起之監聽、並把對外連線之狀態標成 LISTENING. 修前探測(`tmp/mig-task3/red-before.mjs`, 子行程真實監聽 127.0.0.1:port、TCP 可連, 反覆以舊 `listenerPids` 做 `isOwnedBy(listenerPids(port), child.pid)`): 兩批各 4 輪×5 次共 40 次, 27 次回 `[]`——第一批(現行專案之舊 harness)7/20(2/5、0/5、0/5、5/5), 第二批(以 `HARNESS_PROC` 指向裝著 1.0.11 套件之副本, 機器同時有他套件負載試驗, netstat 輸出 300～440 行)20/20, 即 harness 報「由 無人 監聽」之成因, 且漏報率隨機器負載升高. 修後同探測改 `{ useBoth: true }`: 兩批共 40 次 0 漏報, 每次約 0.65 秒(Windows 新起之監聽與無人之 port 一律多走一次 PowerShell).
+- **套件升版後的改用清單**(w-package-tools-e2e 1.0.12 / wsemi 1.9.32): ①`e2eLib.mjs` 刪 `parseListenerPids` 轉出(套件已移除, 不另寫副本); ②`spawnOwn` 身分確認傳 `useBoth: true`(netstat 有列時預設不再查 PowerShell, 可能只見部分監聽者); ③`e2e-setup.mjs` 的依賴要 `(port, opt) => listenerPids(port, opt)` 透傳, 少一個 `opt` 則 ②不生效而全套仍綠——以 LP-W 結構檢核與變異 M8 守; ④`cleanup`(exit／signal 處理器內亦會呼叫)帶 `{ timeout: verifyMs }`, 預設 10 秒且 Windows 最久 2 倍; ⑤`ensurePortFree` 的「查得 `[]` 而 TCP 可連」稍候分支, 原因由「netstat 暫時漏列」變為「兩路皆查無」, 保留稍候(容忍瞬間落差)、逾時仍拋錯, 未放寬——不為過關而刪身分確認或延長等待.
+- **替身要用 spawnSync 形**: `exec(prog, args, { src, timeout, maxBuffer }) => { status, stdout, error }`, 以 `src`(`netstat`／`powershell`／`lsof`)分派固定輸出; PowerShell 輸出格式為 wsemi 內部格式(標記行 `WSEMI-PORTPIDS-BEGIN`／`END`、`R <本地埠> <遠端位址> <遠端埠> <PID>` 列), 收在 `test/tools/portPidsFake.mjs`, wsemi 改格式時只改此檔. 未預期之 `src` 讓替身直接拋錯, 使「多查一個來源」之實作當場失敗.
+- **「身分確認傳不傳 `useBoth`」在假世界裡要建模才測得出**: `unit-harnessLifecycle` 的假世界新增 `hidden` 監聽者(預設查詢見不到、只有 `useBoth` 才見到)與 `ghost` port(TCP 可連而查詢皆無人); 不建模則任何 `listenerPids(port)` 簽名變更都看不出差異(讀碼判斷: 舊假世界的 `listenerPids` 與 `isPortListening` 取自同一張表, `notListedYet` 分支不會被走到; 未以覆蓋率實測).
+- **變異改在副本跑**(`tmp/mig-task3/mutate.mjs`): 副本放 `./tmp/` 下, `node_modules` 靠目錄向上解析, 不需連結; mocha 以 `node node_modules/mocha/bin/mocha.js … --exit` 直接啟動(使「稍候無上限」那類變異會卡死時可由逾時終止, 且 `--exit` 切斷殘留的 setImmediate 迴圈).
+- **測試鎖被他套件獨佔負載試驗占滿時**(本輪遇 w-screenctl `loadrun … exclusive`): 只能排隊; 先把改動、文件做完, 再一次取鎖合併跑(舊套件下之新測試＋全套), 以 detached 鏈各一取一放.
 
 ## 工具使用要點
 

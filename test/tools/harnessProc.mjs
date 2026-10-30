@@ -2,17 +2,18 @@
 //（供 test/tools/harnessLifecycle.mjs、test/tools/e2e-setup.mjs 與 test/unit-harnessProc.test.mjs 共用）。
 //所有權規則（詳 test/tools/e2e-setup.mjs 檔頭）：只殺自建且仍存活之 child；絕不以 port 監聽者、命令列或映像名比對殺任何行程。
 //本檔之命令列查詢（describeProcs／findNodeProcsByCommandLine）只讀，僅供錯誤訊息指認行程。
-//2026-09-28 起：parseListenerPids、listenerPids、isChildAlive、waitChildExit、pidExists、sleepSync、killOwnTree 七個原語改由 e2e 共用設施
-//（當時為 w-web-sso 之 srcPack，2026-09-29 起為 w-package-tools-e2e 1.0.2；經 ./e2eLib.mjs 引用）提供——該版即逐行移植自本檔、依賴注入之選項鍵相同；
-//本檔轉出以維持既有 import 與單元測試不變。
-//netstat 解析規則：只取 TCP 監聽列（外部位址 0.0.0.0:0／[::]:0／*:* 或狀態 LISTENING，前者與顯示語言無關）且本地位址以 `:${port}` 結尾者；
-//不可加 -p TCP（只列 IPv4，會漏掉以 :: 雙堆疊監聽之 [::]:port，srv.mjs 即如此）；查無回 []、工具不可用回 null（呼叫端不得把 null 當成無人）。
+//2026-09-28 起：listenerPids、isChildAlive、waitChildExit、pidExists、sleepSync、killOwnTree 六個原語改由 e2e 共用設施
+//（當時為 w-web-sso 之 srcPack，2026-09-29 起為 w-package-tools-e2e 1.0.2；經 ./e2eLib.mjs 引用）提供；本檔轉出以維持既有 import 不變，不再自行解析 netstat。
+//2026-10-30 起（w-package-tools-e2e 1.0.12／wsemi 1.9.32）：listenerPids 委由 wsemi 之 execProcessPortPidsSync，parseListenerPids 已自套件移除（本檔不再轉出）。
+//listenerPids 語意：監聽列＝TCP、本地埠相符、遠端為萬用位址且遠端埠 0，判定不依狀態欄（部分系統把對外連線標成 LISTENING、又漏列真正的監聽）；
+//Windows 先 netstat -ano（不加 -p TCP，會漏掉以 :: 雙堆疊監聽者），netstat 查無或失敗再以 Get-NetTCPConnection 確認，其查無才判無人；
+//useBoth: true 則兩者皆查取聯集（身分確認用）；回 [] ＝已確認無人、回 null ＝查詢失敗（呼叫端不得把 null 當成無人）。
 import { execSync, spawn } from 'child_process'
 import net from 'net'
 import fs from 'fs'
 import path from 'path'
-import { parseListenerPids, listenerPids, isChildAlive, waitChildExit, pidExists, sleepSync, killOwnTree } from './e2eLib.mjs'
-export { parseListenerPids, listenerPids, isChildAlive, waitChildExit, pidExists, sleepSync, killOwnTree }
+import { listenerPids, isChildAlive, waitChildExit, pidExists, sleepSync, killOwnTree } from './e2eLib.mjs'
+export { listenerPids, isChildAlive, waitChildExit, pidExists, sleepSync, killOwnTree }
 
 
 //同步指令一律帶逾時與隱藏視窗：在 exit／signal 處理器內卡住會使行程無法結束

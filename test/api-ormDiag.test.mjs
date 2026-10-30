@@ -1,9 +1,9 @@
-//api-ormDiag: w-serv-orm 診斷輸出(opt.funLog, w-serv-orm ≥ 1.1.20)於真實 WWebTask 導入本套件 srLog 之契約測試(子行程起真實服務, 不需 browser)
-//對應 spec/設計要點與取捨.md D21; sgud/rule/rulebook_backend.md R-ORMDIAG-01～05
-//  OD-API-01「ORM 診斷輸出交 srLog(label + safe), 不含條件值與錯誤原文; console 無輸出」
-//        → 資料通道 channels.select 時資料庫讀取失敗(替身 WOrm 拋 Error, 原文含條件值標記): 回傳契約不變(failed to select data),
-//          srLog 恰 1 筆 { level:40, event:'orm-diag', label:'channels.select catch', safe:{ errType:'Error' } }, 記錄全文不含標記與錯誤原文,
-//          子行程之 stdout / stderr 不含該診斷標籤與標記(修前 w-serv-orm 預設會印 console)
+//api-ormDiag: w-serv-orm 診斷輸出(opt.funLog, w-serv-orm ≥ 1.1.22)經 wsemi genDiagFunLog 於真實 WWebTask 導入本套件 srLog 之契約測試(子行程起真實服務, 不需 browser)
+//對應 spec/設計要點與取捨.md D21; sgud/rule/rulebook_backend.md R-ORMDIAG-01～05; 規則本體 wsemi R-DIAG-01
+//  OD-API-01「ORM 診斷輸出交 srLog(label + safe), 不含條件值、錯誤原文與憑證; console 無輸出」
+//        → 資料通道 channels.select 時資料庫讀取失敗(替身 WOrm 拋 Error, 原文含條件值標記與連線字串憑證): 回傳契約不變(failed to select data, 固定詞彙原樣),
+//          srLog 恰 1 筆 { level:40, event:'orm-diag', label:'channels.select catch', safe:{ errType:'Error' } }, 記錄全文不含標記、錯誤原文與憑證,
+//          子行程之 stdout / stderr 與全部回應不含該診斷標籤、標記與憑證(修前 w-serv-orm 預設會印 console)
 //  OD-API-02「站點事實: 無效 find 由 w-serv-webdata 白名單先擋, 不到 w-serv-orm」→ 回 invalid find[notObject], 無 orm-diag, srLog 不含條件值
 //  OD-API-03「正常讀取不產生診斷記錄」→ 無條件 select 成功, 全程 orm-diag 只有 OD-API-01 那 1 筆
 //子行程: test/tools/ormDiagChild.mjs (真實 WWebTask + 真實 lmdb + 真實 srLog; 工作目錄 test/_tmp/ormDiag/, 測試自己清)
@@ -23,6 +23,7 @@ const CHILD = path.resolve(__dir, 'tools', 'ormDiagChild.mjs')
 const PORT = 11308
 const MARK = 'victim-od@example.com' //模擬使用者識別 / email: 只應出現在請求與替身錯誤原文, 不得出現在日誌與 console
 const ERR_TEXT = 'disk read failed' //替身錯誤原文之固定字樣
+const PW = 'S3cr3tPw-od' //替身錯誤原文內之連線字串憑證 (須與 tools/ormDiagChild.mjs 一致)
 
 
 //runChild: 起子行程, 收 stdout / stderr, 逾時即終止; 回 { code, out, results }
@@ -96,6 +97,10 @@ describe('api-ormDiag(真實 WWebTask: w-serv-orm 診斷輸出導入 srLog、不
         //spec「不含 id / email / 錯誤原文」
         assert.ok(!lg.text.includes(MARK), `srLog 不得含標記(條件值 / 錯誤原文中之資料值), 實得 ${lg.text}`)
         assert.ok(!lg.text.includes(ERR_TEXT), 'srLog 不得含錯誤原文')
+        assert.ok(!lg.text.includes(PW), 'srLog 不得含連線字串憑證')
+        //spec「回應不含憑證」: 全部回應(RESULT 行)與 stdout / stderr 皆無憑證
+        assert.ok(!JSON.stringify(r.results).includes(PW), '回應不得含連線字串憑證')
+        assert.ok(!r.out.includes(PW), 'console 不得出現連線字串憑證')
         //spec「console 不多出輸出」: 子行程 stdout / stderr 不含診斷標籤、標記與錯誤原文(未接 funLog 時 w-serv-orm 預設會把標籤與摘要印 console)
         assert.ok(!r.out.includes('channels.select catch'), `console 不得出現 w-serv-orm 診斷標籤, 實得 ${r.out}`)
         assert.ok(!r.out.replace(/RESULT:.*/g, '').includes(MARK), 'console 不得出現標記(RESULT 行為測試用回報, 不計)')

@@ -38,11 +38,16 @@ const TABS_CH = ['channelMembers', 'channels']
 function procCore(deps = {}) {
 
     //deps
-    let { woItems, procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite } = deps
+    let { woItems, procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite, diag } = deps
 
     //check: 表鎖與原子防護為多人同時編輯之必要依賴 (WServOrm 回傳物件含之), 缺則 fail-fast, 不以無鎖狀態運作
     if (!isfun(withTabLocks) || !isfun(guardWrite)) {
         throw new Error('invalid deps of procCore, need withTabLocks and guardWrite from WServOrm')
+    }
+
+    //check: 外來值遮罩出口 (server/genDiag.mjs; woItems 例外原文可能含連線字串帳密, 離開 procCore 前一律經 diag.err / diag.mask), 缺則 fail-fast, 不以未遮罩狀態運作
+    if (!isfun(diag) || !isfun(diag.err) || !isfun(diag.mask)) {
+        throw new Error('invalid deps of procCore, need diag (server/genDiag.mjs)')
     }
 
 
@@ -241,6 +246,12 @@ function procCore(deps = {}) {
     }
 
 
+    //errMsg: 外來值 (woItems / 驅動例外) 取訊息文字並經 diag.mask 遮罩, 供 srLog 之 msg 欄 (reject 給呼叫者者仍為固定 key, 不含此值)
+    let errMsg = (e) => {
+        return diag.mask(String((e && e.message) || e))
+    }
+
+
     //runOps: 依序執行寫入單元; 任一失敗則反向補償 (含失敗中之那一步). 全部補償成功回 'saveRolledBack', 補償亦失敗回 'saveWriteFail' (部分資料可能已寫入); 皆記 log
     let runOps = async (event, ops) => {
         let done = []
@@ -253,7 +264,7 @@ function procCore(deps = {}) {
             }
         }
         catch (err) {
-            let msg = (err && err.message) || String(err)
+            let msg = errMsg(err)
             let ok = true
             let undos = [cur, ...done.slice().reverse()]
             for (let op of undos) {
@@ -262,7 +273,7 @@ function procCore(deps = {}) {
                 }
                 catch (err2) {
                     ok = false
-                    srLog.error({ event: `${event}-rollback-fail`, err: 'saveWriteFail', msg: (err2 && err2.message) || String(err2) })
+                    srLog.error({ event: `${event}-rollback-fail`, err: 'saveWriteFail', msg: errMsg(err2) })
                 }
             }
             let key = ok ? 'saveRolledBack' : 'saveWriteFail'
@@ -293,7 +304,7 @@ function procCore(deps = {}) {
                 srLog.error({ event, err: 'errRowsInvalid' })
                 return Promise.reject('errRowsInvalid')
             }
-            return Promise.reject(err)
+            return Promise.reject(diag.err(err)) //其餘為來源不明之外來值 (guardWrite 轉出之寫入例外等), 遮罩後轉出; 上列各鍵為固定 key 不經遮罩
         }
     }
 
@@ -1527,9 +1538,9 @@ function procCore(deps = {}) {
                         chkWrite(await woItems.tasksArchive.del({ id: t.id }), 'tasksArchive.del')
                     }
                     catch (err2) {
-                        srLog.error({ event: 'archiveSweep-undo-fail', err: 'saveWriteFail', msg: (err2 && err2.message) || String(err2) })
+                        srLog.error({ event: 'archiveSweep-undo-fail', err: 'saveWriteFail', msg: errMsg(err2) })
                     }
-                    throw err
+                    throw diag.err(err)
                 }
                 return true
             })

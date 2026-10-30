@@ -13,7 +13,8 @@ import channelsContract from '../../src/schema/contracts/channels.mjs'
 import getMembersContract from '../../src/schema/contracts/channelMembers.mjs'
 import procCore from '../../server/procCore.mjs'
 import createLockSave from '../../server/lockSave.mjs'
-import genOrmFunLog from '../../server/ormDiagLog.mjs'
+import genDiag from '../../server/genDiag.mjs'
+import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -41,13 +42,14 @@ async function mkEnv(name) {
         }
     }
 
-    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db, { funLog: genOrmFunLog(srLog) }); useCache 未給(false)
-    let wp = WServOrm(ds, WOrm, dir, 'worm', { funLog: genOrmFunLog(srLog) })
+    //與 WWebTask.mjs 相同: WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog }); useCache 未給(false)
+    let wp = WServOrm(ds, WOrm, dir, 'worm', { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog })
     let { woItems, withTabLocks, guardWrite } = wp
     let kmx = pmKeyMutex()
     let cst = cacheSt()
-    let lockSave = createLockSave(cst)
-    let pc = procCore({ woItems, procOrm: wp.procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite })
+    let diag = genDiag(dir) //與 WWebTask.mjs 相同: genDiag(url)
+    let lockSave = createLockSave(cst, diag)
+    let pc = procCore({ woItems, procOrm: wp.procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite, diag })
 
     let close = async () => {
         cst.clear()

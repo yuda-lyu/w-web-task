@@ -1,5 +1,5 @@
 //ormDiagChild: api-ormDiag 之子行程 (非測試檔): 以真實 WWebTask (真實 lmdb、真實 srLog、真實資料通道) 在指定 port 起服務,
-//其 WOrm 為包一層之替身: channels.select 的條件 name 以 'od-trigger' 開頭者拋 Error (原文含條件值, 模擬資料庫讀取失敗), 其餘照常.
+//其 WOrm 為包一層之替身: channels.select 的條件 name 以 'od-trigger' 開頭者拋 Error (原文含條件值與連線字串憑證, 模擬資料庫讀取失敗), 其餘照常.
 //之後以 HTTP 打資料通道 (/api/main) 做三次呼叫, 於 stdout 印 'RESULT:<json>' 供父行程斷言; 等 srLog 落檔後結束.
 //用法: node ormDiagChild.mjs <工作目錄(cwd 亦為此)> <port> <marker>
 //  工作目錄下: db/ (lmdb)、logs/ (srLog)、dbf、uploadTemp、tableTags 等皆落此 (父行程負責清除)
@@ -14,6 +14,7 @@ import WWebTask from '../../server/WWebTask.mjs'
 const [dir, portStr, marker] = process.argv.slice(2)
 const port = Number(portStr)
 const TOKEN = 'tk-od'
+const PW = 'S3cr3tPw-od' //替身錯誤原文內之憑證 (須與 api-ormDiag.test.mjs 一致): 不得出現在日誌、console 與回應
 const base = `http://127.0.0.1:${port}`
 const logDir = path.join(dir, 'logs')
 
@@ -25,7 +26,7 @@ function WOrmFail(opt) {
         let select = wo.select.bind(wo)
         wo.select = async (find) => {
             if (find && typeof find.name === 'string' && find.name.startsWith('od-trigger')) {
-                throw new Error(`disk read failed: ${find.name}`)
+                throw new Error(`disk read failed: ${find.name} postgres://admin:${PW}@db.example.com:5432/x password=${PW}`)
             }
             return select(find)
         }

@@ -6,6 +6,7 @@ import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
 import cacheSt from 'wsemi/src/cacheSt.mjs'
 import procCore from '../server/procCore.mjs'
 import createLockSave from '../server/lockSave.mjs'
+import genDiag from '../server/genDiag.mjs'
 import ds from '../src/schema/index.mjs'
 import { makeTable, makeSlowTable, mkLocks } from './tools/memTables.mjs'
 
@@ -33,10 +34,11 @@ const kmx = (key, fn) => fn()
 //lockSave：真實雙擊防護（server/lockSave.mjs, D16; 同 WWebTask.mjs 之建立方式）。既有案例皆依序呼叫, 占位於每次完成即釋放, 不受影響。
 //cacheSt 含 TTL 偵測 timer（setInterval）, 於本檔根 describe 之 after 以 clear() 停止, 否則 mocha 不結束。
 const cst = cacheSt()
-const lockSave = createLockSave(cst)
+const diag = genDiag('./db') //外來值遮罩出口 (同 WWebTask.mjs: genDiag(url)); 秘密與出口接線之專屬案例見 unit-ormDiagLog.test.mjs
+const lockSave = createLockSave(cst, diag)
 
 //procCore 實體
-const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx, lockSave, ...mkLocks(woItems) })
+const pc = procCore({ woItems, procOrm: null, ds, srLog, kmx, lockSave, diag, ...mkLocks(woItems) })
 
 
 // ── 工具函式 ─────────────────────────────────────────────────────────────────
@@ -637,7 +639,7 @@ describe('unit-procCore', function() {
                 tasksArchive: makeSlowTable(),
             }
             cstC = cacheSt()
-            pcC = procCore({ woItems: wo, procOrm: null, ds, srLog, kmx: pmKeyMutex(), lockSave: createLockSave(cstC), ...mkLocks(wo) })
+            pcC = procCore({ woItems: wo, procOrm: null, ds, srLog, kmx: pmKeyMutex(), lockSave: createLockSave(cstC, diag), diag, ...mkLocks(wo) })
             //既有頻道 CH（無主責 agent）
             const ch = ds.channels.funNew({ name: 'DC Channel', ownerId: USER_HUMAN, userId: USER_HUMAN })
             ch.id = CH

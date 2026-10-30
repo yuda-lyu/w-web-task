@@ -1,6 +1,8 @@
 //e2e 共用設施之單一引用點: 指向 w-package-tools-e2e(devDependency, 規格見其 README).
 //2026-09-29 起由姊妹專案 w-web-sso 之 srcPack 改指套件 1.0.2(srcPack 已移入該套件並刪除); 套件依賴(sharp、pixelmatch、pngjs、playwright)自本專案 node_modules 解析.
 //2026-09-30 升 1.0.3: 新增 probeStuckTooltip(原四專案各自手寫於 e2e-setup 之同一實作收斂至套件)、gridContentBox 空表訊息外擴、runIsolatedE2e 之 targets.
+//2026-10-30 升 1.0.12: listenerPids 改委由 wsemi 之 execProcessPortPidsSync(判定不依狀態欄; netstat 查無或失敗再以 Get-NetTCPConnection 確認; 選項 useBoth、timeout、onTrace、exec[spawnSync 形]、platform),
+//parseListenerPids 已自套件移除(本檔不再轉出, 不得自行解析 netstat).
 //共用層、harness 與測試檔一律自本檔 import, 不直接引用套件路徑.
 //本專案之 harness 所有權政策(own: 只用自建、port 被佔即拋錯、跨行程互斥)不在套件內, 仍由 ./harnessLifecycle.mjs 提供.
 export { default as assertBaselineMatch } from 'w-package-tools-e2e/src/assertBaselineMatch.mjs'
@@ -34,7 +36,6 @@ export { default as openCasePage } from 'w-package-tools-e2e/src/openCasePage.mj
 export { default as overlayImageAt } from 'w-package-tools-e2e/src/overlayImageAt.mjs'
 export { default as overlayRegions } from 'w-package-tools-e2e/src/overlayRegions.mjs'
 export { default as pageHasText } from 'w-package-tools-e2e/src/pageHasText.mjs'
-export { default as parseListenerPids } from 'w-package-tools-e2e/src/parseListenerPids.mjs'
 export { default as pidExists } from 'w-package-tools-e2e/src/pidExists.mjs'
 export { default as pollUntil } from 'w-package-tools-e2e/src/pollUntil.mjs'
 export { default as probeHttp } from 'w-package-tools-e2e/src/probeHttp.mjs'

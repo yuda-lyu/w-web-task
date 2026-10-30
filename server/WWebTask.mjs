@@ -19,6 +19,7 @@ import cacheSt from 'wsemi/src/cacheSt.mjs'
 import fsIsFolder from 'wsemi/src/fsIsFolder.mjs'
 import fsIsFile from 'wsemi/src/fsIsFile.mjs'
 import replace from 'wsemi/src/replace.mjs'
+import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
 import WServHapiServer from 'w-serv-hapi/src/WServHapiServer.mjs'
 import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
 import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
@@ -28,7 +29,7 @@ import createLockSave from './lockSave.mjs'
 import createAuthorizeExec from './authorizeExec.mjs'
 import { createAccess, createGuardedFuncs } from './access.mjs'
 import srLogInit from './srLog.mjs'
-import genOrmFunLog from './ormDiagLog.mjs'
+import genDiag from './genDiag.mjs'
 import { maskTok, maskQuery } from './maskLog.mjs'
 import { wrapInjected } from './wrapInjected.mjs'
 import ds from '../src/schema/index.mjs'
@@ -42,6 +43,8 @@ import ds from '../src/schema/index.mjs'
  * 函數層級（資料通道與HTTP REST共用同一張入口函數表，server/access.mjs）：管理類（頻道與成員之建立、修改、刪除）限系統管理者；訊息、任務、已讀游標、成員名冊限系統管理者或該頻道成員；檔案限系統管理者或任一頻道成員；頻道清單、統計、資料通道之channels／channelMembers的select只回呼叫者有權看之頻道之資料。
  * 系統管理者＝getUserByToken所回使用者之isAdmin嚴格等於'y'；應用系統token之使用者用途反查回所綁使用者（等級同其使用者），系統服務用途反查回id以'app:'開頭且isAdmin為'y'（等級為系統管理者）；本套件不分辨用途，不讀isApp。頻道成員＝channelMembers中(channelId, memberId為呼叫者id, isActive為'y')之列（agent若以一般使用者認證，其user.id須為成員）。
  * 公開入口（無須token）只有前端靜態檔；/api/*與資料通道一律須token，系統函數只公開'[sys:getFuncList]'（且本套件之getUserIdByToken對空token fail-closed）。
+ * 診斷輸出：w-serv-orm（≥1.1.22）之診斷經wsemi之genDiagFunLog轉寫為srLog.warn({ event: 'orm-diag', label, safe })，只寫標籤與安全摘要，不取細節（detail）、不寫console；srLog缺warn不再於建構時拋錯（寫入失敗被吞）。選項與遮罩規則見wsemi之getDiag／genDiagFunLog與w-serv-orm之說明，本套件不提供logDetail。
+ * 外來值遮罩：後端驅動之例外原文（外來值）離開本套件前（回遠端之失敗msg、資料通道函數失敗之reject、寫入srLog之msg與err、封存補償後轉拋）一律經wsemi getDiag實例之diag.mask／diag.err（server/genDiag.mjs，秘密來源為url：連線字串含帳密者整串、帳密與裸密碼皆遮，檔案位置視為儲存路徑不遮；網址帳密、password=、Bearer等形態由樣式規則遮罩）；本套件自身以固定詞彙（i18n key）組成之失敗與成功回應之資料不經遮罩。
  *
  * @class
  * @param {Function} WOrm 輸入資料庫ORM函數
@@ -170,6 +173,10 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     //srLog（後端 log；錯誤一律 log err-key 供識別）
     let srLog = srLogInit(opt)
 
+    //diag（外來值遮罩出口，server/genDiag.mjs）：後端、驅動之例外原文可能含連線字串帳密，離開本套件前（回遠端之 msg、對外 reject／throw、寫入 srLog 之 msg 與 err）一律經 diag.mask／diag.err；
+    //本套件自身以固定詞彙組成之 reject（i18n key）不經遮罩。秘密來源為 url，其餘憑證形態（網址帳密、password=、Bearer）由 wsemi 之樣式規則遮罩。spec D21，規則 R-ORMDIAG-07
+    let diag = genDiag(url)
+
     //注入函數一律經 wrapInjected 包裝後使用（W 契約，spec/設計要點與取捨.md D15）：
     //部署方注入之 getUserByToken / verifyClientUser / verifyAppUser 同步拋錯或 reject 時，視同否定結果（查無 → null、無權限 → false），
     //走各呼叫點既有分支回自家 key；失敗原文（舊版 sso helper 為已代入權杖之完整網址）不上拋、不入 log，只記 describeUpstream 之 key 或型別。
@@ -185,10 +192,11 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
 
 
     //WServOrm
-    //opt.funLog (w-serv-orm ≥ 1.1.20): 診斷輸出改交 srLog (只寫 label 與不含個資之 safe, 不寫 detail; spec D21), w-serv-orm 不再寫 console; 其餘選項與行為不變
+    //opt.funLog (w-serv-orm ≥ 1.1.22): 診斷輸出改交 srLog, 由 wsemi 之 genDiagFunLog 轉接 (只寫 label 與 safe 為 srLog.warn({ event:'orm-diag', label, safe }), 不取 detail; spec D21, 規則 wsemi R-DIAG-01),
+    //w-serv-orm 不再寫 console; 其餘選項與行為不變. 每次取用 srLog.warn (不於建構時固定), 與其他 srLog 呼叫點一致; 本套件不呼叫 close (srLog 與行程同壽)
     let wp = {}
     try {
-        wp = WServOrm(ds, WOrm, url, db, { funLog: genOrmFunLog(srLog) })
+        wp = WServOrm(ds, WOrm, url, db, { funLog: genDiagFunLog((o) => srLog.warn(o)).funLog })
     }
     catch (err) {
         //ORM 為必要依賴：初始化失敗即 fail-fast，不以 wp={} 帶 undefined woItems/procOrm 殘缺啟動
@@ -207,6 +215,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
             r.msg = r.msg.message
         }
         if (r.state !== 'success') {
+            r.msg = diag.mask(r.msg) //失敗 msg 隨回應回遠端並入 srLog: 來源不明 (核心 reject 之 Error 已轉 message, 可能為驅動例外原文), 遮罩後使用; 成功時 msg 為資料, 不遮
             srLog.error({ event: 'api/' + event, err: r.msg })
         }
         return r
@@ -223,8 +232,9 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                 return result
             }
             catch (err) {
-                srLog.error({ event: ev, err })
-                return Promise.reject(err)
+                let e = diag.err(err) //來源不明 (業務函式之 reject: 自家 key 或 woItems 例外): 遮罩後同時用於 srLog 與轉出之 reject (回遠端經資料通道)
+                srLog.error({ event: ev, err: e })
+                return Promise.reject(e)
             }
         }
     }
@@ -246,11 +256,11 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
     //lockSave: 有副作用之寫入路徑之雙擊防護(後端, 見 lockSave.mjs, spec D16): 同一操作者之同一操作(或同一列)處理中再送出即 reject, 不排隊.
     //cacheSt 內含 TTL 偵測 timer(setInterval) → 建於此並注入 procCore, 不於 procCore 內建立: procCore 保持無 timer, unit 測試可獨立建構退出(同 D12 封存 timer 之安排)
     let cst = cacheSt()
-    let lockSave = createLockSave(cst)
+    let lockSave = createLockSave(cst, diag)
 
 
     //procCore
-    let pc = procCore({ woItems, procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite })
+    let pc = procCore({ woItems, procOrm, ds, srLog, kmx, lockSave, withTabLocks, guardWrite, diag })
 
 
     //access: 呼叫者角色與成員檢查之單一擁有者 (server/access.mjs; 規格見 spec/設計要點與取捨.md D20). procCore 不做授權, 授權只在下方 gf (入口函數表) 套用一次.
@@ -275,7 +285,7 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                     }
                 })
                 .catch((err) => {
-                    srLog.error({ event: 'archiveSweep-error', msg: (typeof err === 'string') ? err : ((err && err.message) || 'unknown') })
+                    srLog.error({ event: 'archiveSweep-error', msg: diag.mask(String((typeof err === 'string') ? err : ((err && err.message) || 'unknown'))) })
                 })
                 .finally(() => {
                     lockingForArchive = false
@@ -989,7 +999,8 @@ function WWebTask(WOrm, url, db, getUserByToken, verifyClientUser, verifyAppUser
                 }
                 catch (err) {
                     //上游（注入函數）失敗已由 wrapInjected 轉為否定結果 → 此處收到之字串皆為自家 key（errUserNotFound / errUserNoPermission / checkUser 與 procCore 之 key）
-                    let key = isestr(err) ? err : get(err, 'message', 'errFileNotFound')
+                    //下游 (procCore 讀檔、woItems) 之例外原文可能含連線字串帳密, key 隨 404 回應回遠端並入 srLog, 故經 diag.mask 遮罩 (自家 key 無應遮者原樣)
+                    let key = diag.mask(isestr(err) ? err : get(err, 'message', 'errFileNotFound'))
                     srLog.error({ event: 'api/getFile', err: key })
                     return res.response(JSON.stringify({ state: 'error', msg: key })).code(404).type('application/json')
                 }

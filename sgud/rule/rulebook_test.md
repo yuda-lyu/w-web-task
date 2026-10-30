@@ -36,12 +36,12 @@
 | D20 呼叫者身分驗證與存取矩陣(C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊; task-run01) | `api-callerMatrix`(真後端; 入口 × 傳輸 × 7 類呼叫者 462 格 + 入口全集 + 系統函數 / 輪詢 / 通訊路由 / C3 案)、`unit-access`(角色判準、登錄 fail-closed、成員判準、規則、清單收斂)、`unit-mAccess`(前端 `canManage`); 變異驗證見 `rulebook_security.md` R-AUTHZ-10 | `npx mocha test/unit-access.test.mjs test/unit-mAccess.test.mjs --timeout 60000`; api `npx mocha test/api-callerMatrix.test.mjs --timeout 180000`(須持測試鎖) |
 | D17-1 w-serv-orm 已移除之三鍵於入口拒絕、無副作用 | `unit-optRemoved`(不起伺服器、不開埠) | `npx mocha test/unit-optRemoved.test.mjs --timeout 60000` |
 | D17-2 資料通道只開 select、authorizeExec 拒絕記 srLog | `unit-authorizeExec`、`api-dataChannel` | `npx mocha test/unit-authorizeExec.test.mjs`; api 另 `npx mocha test/api-dataChannel.test.mjs --timeout 180000`(須持測試鎖) |
-| D21 w-serv-orm 診斷輸出導入 srLog(R-ORMDIAG-01～05; task-run01 2026-10-28) | `unit-ormDiagLog`(17 案: funLog 本身 8、真實 w-serv-orm + lmdb 8、站點接線 1)、`api-ormDiag`(4 案; 子行程起真實 WWebTask + 真實 srLog 檔 + console 擷取) | `npx mocha test/unit-ormDiagLog.test.mjs --timeout 60000`; api 另 `npx mocha test/api-ormDiag.test.mjs --timeout 180000`(占用 port 11308; 須持測試鎖) |
+| D21 w-serv-orm 診斷輸出導入 srLog 與外來值遮罩出口(R-ORMDIAG-01～07; task-run01 2026-10-28; 2026-10-29 遷移至 wsemi `genDiagFunLog`; 2026-10-30 外來值出口遮罩) | `unit-ormDiagLog`(29 案: 站點接線 2、funLog 本身 9〔正式運算式經 `test/tools/diagWiring.mjs` 取自 `server/WWebTask.mjs`〕、wsemi 語料 `genDiagFunLog` 組 A01～A06、A09、A10 共 8 + 登錄 1、真實 w-serv-orm + lmdb 9)、`api-ormDiag`(4 案; 子行程起真實 WWebTask + 真實 srLog 檔 + console 擷取, 替身錯誤原文含連線字串憑證)、`unit-ormDiagMask`(25 案: 站點接線 6〔遮罩呼叫逐字固定、固定詞彙不包、`.message` 與原樣轉出之反向盤點、缺 `diag` 即拋〕、工廠 5、`procCore` 出口 10〔假 `woItems` 拋含三種形態憑證之 Error〕、`lockSave` 4)、`api-ormLeak`(8 案; 子行程起真實 WWebTask,連線位址含虛構帳密,WOrm 替身於 procCore 直取之表拋含憑證之 Error,驗 REST、`getFile`、資料通道、封存掃描四出口與固定詞彙、成功資料不遮) | `npx mocha test/unit-ormDiagLog.test.mjs --timeout 60000`; api 另 `npx mocha test/api-ormDiag.test.mjs --timeout 180000`(占用 port 11308)、`npx mocha test/unit-ormDiagMask.test.mjs --timeout 60000`、`npx mocha test/api-ormLeak.test.mjs --timeout 180000`(占用 port 11309; 封存掃描首掃固定於啟動後 30 秒, 約 40 秒); 皆須持測試鎖 |
 | D17-3 資料通道連線閘套用 verifyClientUser | `api-dataChannel`(非系統管理者被拒)、`api-tokenLeak` E7(verifyClientUser 拋錯) | `npx mocha test/api-dataChannel.test.mjs test/api-tokenLeak.test.mjs --timeout 180000`(須持測試鎖) |
 
 ## e2e 落地映射(對應全域技能[role-coder-for-test-e2e] §3 契約)
 
-表中「套件」指 devDependency `w-package-tools-e2e`(`^1.0.6`; 2026-09-30 由 `^1.0.2` 升 `^1.0.3`, 2026-10-01 升 `^1.0.6`(src 不變、依賴 playwright `^1.63.0` 使截圖之 Chromium 由 151 換為 153); 經 `test/tools/e2eLib.mjs` 引用; 2026-09-28 ～ 09-29 為 w-web-sso 之 `srcPack`, 同名同行為).
+表中「套件」指 devDependency `w-package-tools-e2e`(`^1.0.12`; 2026-10-30 由 `^1.0.11` 升 `^1.0.12`〔`listenerPids` 委由 wsemi、新增透傳 `useBoth`／`timeout`, `parseListenerPids` 移除〕; 2026-09-30 由 `^1.0.2` 升 `^1.0.3`, 2026-10-01 升 `^1.0.6`(src 不變、依賴 playwright `^1.63.0` 使截圖之 Chromium 由 151 換為 153); 經 `test/tools/e2eLib.mjs` 引用; 2026-09-28 ～ 09-29 為 w-web-sso 之 `srcPack`, 同名同行為).
 
 | 契約 | 本專案實名 / 模式 | 偏離與依據 |
 |---|---|---|
@@ -65,9 +65,12 @@
 
 | 規則 | 站點全集 | 判準 | 盤點指令 |
 |---|---|---|---|
-| 只殺本 harness 自建且仍存活之子行程樹並回驗; **絕不以命令列、映像名或 port 監聽者殺行程**(他專案曾以命令列含 `srv.mjs` 比對而殺掉整台機器之後端) | `killOwnTree` / `waitChildExit` / `pidExists`(套件原語, 經 `harnessProc.mjs:13` 轉出); `findNodeProcsByCommandLine` 只讀、僅供錯誤訊息 | 已套; 守 `unit-harnessLifecycle`、`unit-harnessProc` | `grep -n "taskkill\|process.kill\|Stop-Process" test/tools/*.mjs`(只應出現在註解) |
+| 只殺本 harness 自建且仍存活之子行程樹並回驗; **絕不以命令列、映像名或 port 監聽者殺行程**(他專案曾以命令列含 `srv.mjs` 比對而殺掉整台機器之後端) | `killOwnTree` / `waitChildExit` / `pidExists`(套件原語, 經 `harnessProc.mjs:16` 轉出); `findNodeProcsByCommandLine` 只讀、僅供錯誤訊息 | 已套; 守 `unit-harnessLifecycle`、`unit-harnessProc` | `grep -n "taskkill\|process.kill\|Stop-Process" test/tools/*.mjs`(只應出現在註解) |
 | port 被非自建行程佔用即拋錯(附命令列), 不沿用、不殺 | `harness.startServersOnce` / `restartBackend` | 已套 | `unit-harnessLifecycle` 相關案例 |
-| 同一專案同時只允許一個 harness(互斥 port 11208); `NODE_ENV=production` 拒跑(`srv.mjs` 之測試權杖停用) | `acquirePortLock` / `releasePortLock`(`harnessProc.mjs:241` / `:264`) | 已套 | `grep -n "LOCK_PORT\|NODE_ENV" test/tools/e2e-setup.mjs` |
-| 重建種子前把測試資料庫整個移開(rename), 有人持有即整體失敗、不動任何檔案; 中介資料目錄同原則 | `moveAwayDir`(`harnessProc.mjs:60`) | 已套 | — |
+| 同一專案同時只允許一個 harness(互斥 port 11208); `NODE_ENV=production` 拒跑(`srv.mjs` 之測試權杖停用) | `acquirePortLock` / `releasePortLock`(`harnessProc.mjs:243` / `:266`) | 已套 | `grep -n "LOCK_PORT\|NODE_ENV" test/tools/e2e-setup.mjs` |
+| 重建種子前把測試資料庫整個移開(rename), 有人持有即整體失敗、不動任何檔案; 中介資料目錄同原則 | `moveAwayDir`(`harnessProc.mjs:62`) | 已套 | — |
+| **port 監聽者查詢一律走套件 `listenerPids`(w-package-tools-e2e ≥ 1.0.12 → wsemi `execProcessPortPidsSync`), 不自行解析 netstat／lsof**(R-HARNESS-PID-01; 2026-10-30): 判定不依狀態欄(本機 Windows 26300 之 `netstat -ano` 會漏列新起之監聽、並把對外連線標成 LISTENING); Windows 先 netstat, 查無或失敗再以 Get-NetTCPConnection 確認, 其查無才回 `[]`; `null`＝查詢失敗, 不得當成無人 | `harnessProc.mjs:16` 轉出; `e2eLib.mjs` 不再轉出 `parseListenerPids`(套件已移除); `e2e-setup.mjs` 依賴 `listenerPids: (port, opt) => listenerPids(port, opt)`(透傳 `useBoth`／`timeout`) | 已套 | `grep -rnE "parseListenerPids\|netstat" test/tools/*.mjs`(程式碼行應為 0, 註解除外); 守 `unit-harnessProc` LP01～LP12、`unit-harnessLifecycle` LP-W |
+| **身分確認取完整監聽者集合**(R-HARNESS-PID-02): `spawnOwn` 之 `isOwnedBy(listenerPids(port, { useBoth: true }), child.pid)`(netstat 有列時預設不再查 PowerShell, 可能只見部分監聽者); `ensurePortFree`／`teardown` 用預設; `cleanup`(可在 exit／signal 處理器內)帶 `{ timeout: verifyMs }`; 身分確認查詢失敗(`null`)維持先前行為——警告後僅以「啟動前 port 為空＋自建行程存活」為據(**不得為過關而再放寬**) | `harnessLifecycle.mjs` `spawnOwn`、`cleanup` | 已套 | 守 `unit-harnessLifecycle` LP-B、LP-T; 變異 M1～M3、M8 |
+| **`ensurePortFree` 之「TCP 可連而兩路查詢皆無人」稍候分支**(`unlistedButConnectable`, 原名 `notListedYet`; R-HARNESS-PID-03): `[]` 已表示 netstat 與 Get-NetTCPConnection 皆查無, 不再是「netstat 暫時漏列」; 保留於 `rebindWaitMs` 內稍候(容忍 TCP 探測與查詢之瞬間落差、關閉中之 socket), **逾時仍可連即拋錯, 不放行**(與先前相同, 未放寬) | `harnessLifecycle.mjs` `ensurePortFree` | 已套 | 守 `unit-harnessLifecycle` LP-U; 變異 M4～M6 |
 | 測試實例與開發服務分離: 正式 `./db`、11008、8080 不動 | 工作目錄 `test/_tmp/e2e-harness/root`、port 11108 / 8091 | 已套(2026-09-27 實測正式 `./db` 檔案與 mtime 不變) | — |
 

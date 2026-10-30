@@ -29,7 +29,7 @@
 <nav >
     
     
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createAuthorizeExec">createAuthorizeExec</a></li><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#genOrmFunLog">genOrmFunLog</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WWebTask.html">WWebTask</a></li></ul><h3>Global</h3><ul><li><a href="global.html#createAuthorizeExec">createAuthorizeExec</a></li><li><a href="global.html#createLockSave">createLockSave</a></li><li><a href="global.html#describeUpstream">describeUpstream</a></li><li><a href="global.html#genDiag">genDiag</a></li><li><a href="global.html#maskQuery">maskQuery</a></li><li><a href="global.html#maskTok">maskTok</a></li><li><a href="global.html#maskUrl">maskUrl</a></li><li><a href="global.html#submitGuard">submitGuard</a></li><li><a href="global.html#wrapInjected">wrapInjected</a></li></ul>
     
 </nav>
 
@@ -368,7 +368,7 @@ getUserIdByToken 已 fail-closed 且 w-serv-webdata 只綁定 methodsExec 之方
 
     
 
-    <h4 class="name" id="createLockSave"><span class="type-signature"></span>createLockSave<span class="signature">(cst)</span><span class="type-signature"> &rarr; {function}</span></h4>
+    <h4 class="name" id="createLockSave"><span class="type-signature"></span>createLockSave<span class="signature">(cst, diag)</span><span class="type-signature"> &rarr; {function}</span></h4>
 
     
 
@@ -381,7 +381,7 @@ getUserIdByToken 已 fail-closed 且 w-serv-webdata 只綁定 methodsExec 之方
     <dd class="tag-description"><ul class="dummy"><li><p>有副作用之寫入路徑(如清單儲存 updateUsersList / updateTokensList / updateIpsList)之雙擊防護(後端, D16)</p>
 <p>以「操作:操作者 id」於 wsemi cacheSt 原子占位執行 fn, 同一操作者之同一操作處理中再送出即 reject 錯誤 key
 (預設 'saveInProgress', 可以 opt.errKey 指定; 皆為 i18n key, 見 procLang); 不同操作者、不同操作互不影響;
-fn 之 reject 原樣 bubble; fn 結束(含失敗)即釋放.
+fn 之 reject 為來源不明之外來值(業務函式內可能含後端或驅動例外), 轉出前經 diag.err 遮罩(無應遮者原樣, 固定 key 不變); fn 結束(含失敗)即釋放.
 第 2 次不排隊執行: 其內容與第 1 次相同, 排隊後再寫一次會把第 1 次剛建立之列當修改覆寫
 (依序重送另由各專案之資料層檢查擋, 如 SSO procCore.updateTabItems 之新增列檢查回 'saveNewRowExists').
 operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列之連發, 同批其他列不受影響).</p></li></ul></dd>
@@ -390,7 +390,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="server_lockSave.mjs.html">server/lockSave.mjs</a>, <a href="server_lockSave.mjs.html#line18">line 18</a>
+        <a href="server_lockSave.mjs.html">server/lockSave.mjs</a>, <a href="server_lockSave.mjs.html#line20">line 20</a>
     </li></ul></dd>
     
 
@@ -480,6 +480,30 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
             
 
             <td class="description last"><p>輸入 wsemi cacheSt 實例</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>diag</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+
+            
+
+            <td class="description last"><p>輸入外來值遮罩出口(server/genDiag.mjs 之結果, 須帶 err), 非函式或缺 err 即拋 invalid diag</p></td>
         </tr>
 
     
@@ -694,7 +718,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 
     
 
-    <h4 class="name" id="genOrmFunLog"><span class="type-signature"></span>genOrmFunLog<span class="signature">(srLog)</span><span class="type-signature"> &rarr; {function}</span></h4>
+    <h4 class="name" id="genDiag"><span class="type-signature"></span>genDiag<span class="signature">(url)</span><span class="type-signature"> &rarr; {function}</span></h4>
 
     
 
@@ -704,13 +728,17 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 <dl class="details">
     
     <dt class="tag-description">Description:</dt>
-    <dd class="tag-description"><ul class="dummy"><li><p>產生交 w-serv-orm 之 opt.funLog 的函數</p></li></ul></dd>
+    <dd class="tag-description"><ul class="dummy"><li><p>產生本套件之外來值遮罩出口(wsemi之getDiag實例，只用其diag.err與diag.mask，不作診斷輸出)</p>
+<p>外來值＝後端、驅動或使用端回呼之錯誤(原文可能含連線字串、帳密、權杖)，離開本套件前(對外reject與throw、回遠端之msg、寫入srLog之msg與err)須經diag.err或diag.mask；
+本套件自身以固定詞彙(i18n key或字面)組成之reject不經遮罩。規格見dspec〈診斷輸出與遮罩〉D3，規則見sgud/rule/rulebook_backend.md R-ORMDIAG-07</p>
+<p>秘密來源為部署端給之ORM連線位址url，分類沿用w-serv-orm之getUrlSecrets(單一定義，本套件不另寫等價實作)：連線字串(含://或@)列為網址(帳密為憑證，對外錯誤值亦遮)，
+其餘(lmdb、lowdb等之檔案位置)列為儲存路徑(只遮診斷輸出，對外錯誤值不遮，dspec Q3)；未列為秘密之憑證形態(網址帳密、password=、Bearer等)由wsemi之樣式規則遮罩</p></li></ul></dd>
     
 
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="server_ormDiagLog.mjs.html">server/ormDiagLog.mjs</a>, <a href="server_ormDiagLog.mjs.html#line70">line 70</a>
+        <a href="server_genDiag.mjs.html">server/genDiag.mjs</a>, <a href="server_genDiag.mjs.html#line17">line 17</a>
     </li></ul></dd>
     
 
@@ -782,13 +810,13 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 
         <tr>
             
-                <td class="name"><code>srLog</code></td>
+                <td class="name"><code>url</code></td>
             
 
             <td class="type">
             
                 
-<span class="param-type">Object</span>
+<span class="param-type">String</span>
 
 
 
@@ -799,7 +827,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 
             
 
-            <td class="description last"><p>輸入後端 log 物件, 須具 warn 函數</p></td>
+            <td class="description last"><p>輸入資料庫連線位址字串，即WWebTask之url</p></td>
         </tr>
 
     
@@ -825,7 +853,7 @@ operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列�
 
         
 <div class="param-desc">
-    <p>回傳 (label, safe, detail) =&gt; undefined; detail 不取用</p>
+    <p>回傳wsemi之diag函數，另帶err、mask(此處不呼叫diag本身)</p>
 </div>
 
 
@@ -1817,7 +1845,7 @@ opt.hold 為函數, 輸入流程結果, 回傳 true 時保持占位與按鈕鎖(
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Wed Oct 28 2026 14:27:11 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Fri Oct 30 2026 10:49:33 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>

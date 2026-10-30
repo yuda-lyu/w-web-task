@@ -3,6 +3,8 @@
 //每案註明對應之需求（R1 不越權、R2 清理、R3 重建種子、R4 合跑、R5 對稱、R6 可診斷）與全盤矩陣格。
 //不碰真實 port 與行程（npm test 中本檔於 e2e 之後執行，此時 harness 之服務仍在）。
 import assert from 'assert'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
 import { EventEmitter } from 'events'
 import { createHarness, Cancelled } from './tools/harnessLifecycle.mjs'
 import { waitChildExit } from './tools/harnessProc.mjs'
@@ -23,11 +25,13 @@ function makeWorld() {
     const calls = []
     const logs = []
     const deferred = {}
-    const w = { calls, logs, ports, procs, dbHeld: false, holders: [], lockTaken: false, netstatNull: false, seedPlan: {}, backendPlan: [], frontendPlan: [], settingsPorts: {}, env: {}, onKill: null, onSleep: null }
+    //listenerCalls：listenerPids 之每次呼叫（port、opt）；ghost：TCP 可連、但 listenerPids 兩路查詢皆回報無人之 port（關閉中之 socket）
+    const w = { calls, logs, ports, procs, dbHeld: false, holders: [], lockTaken: false, netstatNull: false, seedPlan: {}, backendPlan: [], frontendPlan: [], settingsPorts: {}, env: {}, onKill: null, onSleep: null, listenerCalls: [], ghost: new Set() }
 
-    function listen(port, pid, ready = true) {
+    //hidden：只有 useBoth 查詢（netstat＋Get-NetTCPConnection 聯集）才看得到的監聽者（預設查詢＝netstat 有列即止，見不到）
+    function listen(port, pid, ready = true, hidden = false) {
         const l = ports.get(port) || []
-        l.push({ pid: String(pid), ready })
+        l.push({ pid: String(pid), ready, hidden })
         ports.set(port, l)
     }
     function unlistenPid(pid) {
@@ -54,9 +58,9 @@ function makeWorld() {
     }
     w.listen = listen
     w.unlistenPid = unlistenPid
-    w.foreign = (port, pid = 777, ready = true) => {
+    w.foreign = (port, pid = 777, ready = true, hidden = false) => {
         procs.set(String(pid), { alive: true, foreign: true })
-        listen(port, pid, ready)
+        listen(port, pid, ready, hidden)
     }
     w.childOf = (kind) => [...procs.values()].filter((r) => r.kind === kind).map((r) => r.child)
     w.release = (kind) => { if (deferred[kind]) { deferred[kind]() } }
@@ -77,6 +81,7 @@ function makeWorld() {
             }
             else if (plan === 'never-ready') { listen(BACKEND, c.pid, false) }
             else if (plan === 'co-listen') { listen(BACKEND, c.pid); w.foreign(BACKEND, 888) }
+            else if (plan === 'co-listen-hidden') { listen(BACKEND, c.pid); w.foreign(BACKEND, 888, true, true) }
             else {
                 listen(BACKEND, c.pid)
                 if (plan === 'unkillable') { rec.unkillable = true }
@@ -127,12 +132,14 @@ function makeWorld() {
             const l = ports.get(port)
             return !!l && l.some((x) => x.ready)
         },
-        listenerPids(port) {
+        listenerPids(port, opt) {
+            w.listenerCalls.push({ port, opt })
             if (w.netstatNull) return null
             const l = ports.get(port)
-            return l ? [...new Set(l.map((x) => x.pid))] : []
+            const seen = l ? l.filter((x) => !x.hidden || (opt && opt.useBoth === true)) : []
+            return [...new Set(seen.map((x) => x.pid))]
         },
-        async isPortListening(port) { return ports.has(port) },
+        async isPortListening(port) { return ports.has(port) || w.ghost.has(port) },
         killOwnTree(child) {
             calls.push(['kill', String(child.pid)])
             const rec = procs.get(String(child.pid))
@@ -335,6 +342,24 @@ describe('unit-harnessLifecycle（e2e／api harness 生命週期編排）', func
             let h2 = makeHarness(w2)
             await h2.startServersOnce({ backendOnly: true })
             assert.ok(w2.logs.some((l) => /無法查詢 port 11108 之監聽者 PID/.test(l)))
+            assert.ok(!w2.logs.some((l) => /netstat／lsof/.test(l)), '警告訊息不再指稱特定查詢指令（Windows 另有 Get-NetTCPConnection 備援）')
+        })
+
+        it('port 無人監聽（兩路查詢皆確認）而 TCP 仍可連（關閉中之 socket）：於 rebindWaitMs 內稍候，釋放後照常啟動；逾時仍可連即拋錯，不放行（LP-U）', async function() {
+            //2026-10-30：listenerPids 回 [] ＝ netstat 與 Get-NetTCPConnection 皆查無，分支只容忍 TCP 探測與查詢之瞬間落差
+            let w = makeWorld()
+            w.ghost.add(BACKEND)
+            w.onSleep = (t) => { if (t >= 600) { w.ghost.delete(BACKEND) } }
+            let h = makeHarness(w)
+            await h.startServersOnce({ backendOnly: true })
+            assert.strictEqual(count(w.calls, 'spawnBackend'), 1)
+            assert.ok(w.now() >= 600, '應等到 TCP 不可連才啟動')
+            let w2 = makeWorld()
+            w2.ghost.add(BACKEND)
+            let h2 = makeHarness(w2)
+            await assert.rejects(h2.startServersOnce({ backendOnly: true }), /被非本 harness 啟動之行程佔用（PID 無法取得）/)
+            assert.strictEqual(count(w2.calls, 'spawnBackend'), 0, '逾時仍可連不得啟動')
+            assert.ok(w2.now() >= 1000, '應等滿 rebindWaitMs 才拋錯')
         })
 
         it('種子失敗 → 拋錯，不起後端（M1-9／X2）', async function() {
@@ -384,6 +409,24 @@ describe('unit-harnessLifecycle（e2e／api harness 生命週期編排）', func
             await assert.rejects(h.startServersOnce({ backendOnly: true }), (e) => /不是（或不只是）剛啟動之自建行程/.test(e.message) && /PID 888/.test(e.message))
             assert.strictEqual(aliveOwn(w, 'backend').length, 0)
             assert.ok(!w.calls.some((c) => c[0] === 'kill' && c[1] === '888'), '不得殺他者')
+        })
+
+        it('身分確認取完整監聽者集合（useBoth）：預設查詢只見自建者、另有他者共聽 → 判為非自建並拋錯，不殺他者（LP-B）', async function() {
+            //Windows 之 netstat 有列出時預設不再查 Get-NetTCPConnection，可能只見部分監聽者；spawnOwn 之身分確認必須傳 useBoth: true
+            let w = makeWorld()
+            w.backendPlan = ['co-listen-hidden']
+            let h = makeHarness(w)
+            await assert.rejects(h.startServersOnce({ backendOnly: true }), (e) => /不是（或不只是）剛啟動之自建行程/.test(e.message) && /PID 888/.test(e.message))
+            assert.strictEqual(aliveOwn(w, 'backend').length, 0)
+            assert.ok(!w.calls.some((c) => c[0] === 'kill' && c[1] === '888'), '不得殺他者')
+            //對照：無他者時身分確認通過；ensurePortFree 之查詢不傳 useBoth、身分確認恰傳 { useBoth: true }
+            let w2 = makeWorld()
+            let h2 = makeHarness(w2)
+            await h2.startServersOnce({ backendOnly: true })
+            let qs = w2.listenerCalls.filter((c) => c.port === BACKEND)
+            assert.strictEqual(qs.length, 2, 'ensurePortFree 一次＋身分確認一次')
+            assert.strictEqual(qs[0].opt, undefined)
+            assert.deepStrictEqual(qs[1].opt, { useBoth: true })
         })
 
         it('前端改綁他 port（portfinder 漂移）→ 殺自建並拋錯（A-4 Opus B）', async function() {
@@ -593,12 +636,39 @@ describe('unit-harnessLifecycle（e2e／api harness 生命週期編排）', func
             assert.ok(w.logs.some((l) => /cleanup 後 500ms 仍有殘留/.test(l)))
         })
 
+        it('cleanup（可在 exit／signal 處理器內執行）之殘留回驗查詢帶逾時上限（verifyMs），不用 10 秒預設值（LP-T）', async function() {
+            //listenerPids 為同步子指令（Windows 下 netstat＋Get-NetTCPConnection 最久約 2 倍逾時），預設逾時在處理器內過長
+            let w = makeWorld()
+            let h = makeHarness(w, { verifyMs: 777 })
+            await h.startServersOnce({ backendOnly: true })
+            w.listenerCalls.length = 0
+            h.cleanup()
+            let qs = w.listenerCalls.filter((c) => c.port === BACKEND)
+            assert.ok(qs.length >= 1, 'cleanup 應回驗自建後端之 port 已釋放')
+            assert.ok(qs.every((c) => c.opt && c.opt.timeout === 777), `cleanup 之查詢應帶 { timeout: verifyMs }，實得 ${JSON.stringify(qs.map((c) => c.opt))}`)
+        })
+
         it('cleanup 冪等：無自建行程時不殺任何行程、不報錯', function() {
             let w = makeWorld()
             let h = makeHarness(w)
             h.cleanup()
             h.cleanup()
             assert.strictEqual(count(w.calls, 'kill'), 0)
+        })
+
+    })
+
+
+    // ── 組裝處接線（結構檢核）：e2e-setup 之 listenerPids 依賴須透傳 opt（useBoth、timeout），否則上列行為在真實 harness 不生效 ──
+    describe('e2e-setup 接線', function() {
+
+        it('LP-W listenerPids 依賴為 (port, opt) => listenerPids(port, opt)，且不自行解析 netstat', function() {
+            //e2e-setup 在 import 時即組裝 harness 並檢查診斷環境，不宜在單元測試中載入；以原始碼逐字檢核（行為由 LP-B／LP-T 與全套 api／e2e 守）
+            let src = fs.readFileSync(fileURLToPath(new URL('./tools/e2e-setup.mjs', import.meta.url)), 'utf8')
+            let code = src.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n')
+            assert.ok(/listenerPids: \(port, opt\) => listenerPids\(port, opt\)/.test(code), '依賴須透傳 opt')
+            assert.ok(!/listenerPids: \(port\) =>/.test(code), '不得改回只傳 port')
+            assert.ok(!/netstat/.test(code), 'e2e-setup 不得自行呼叫或解析 netstat')
         })
 
     })

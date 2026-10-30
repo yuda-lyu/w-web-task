@@ -1,6 +1,7 @@
 import assert from 'assert'
 import cacheSt from 'wsemi/src/cacheSt.mjs'
 import createLockSave from '../server/lockSave.mjs'
+import genDiag from '../server/genDiag.mjs'
 
 
 //
@@ -30,7 +31,7 @@ describe('lockSave (後端清單儲存雙擊防護, D16)', function() {
 
     beforeEach(function() {
         cst = cacheSt()
-        lockSave = createLockSave(cst)
+        lockSave = createLockSave(cst, genDiag('./db'))
     })
 
     afterEach(function() {

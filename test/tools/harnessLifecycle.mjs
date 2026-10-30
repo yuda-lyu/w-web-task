@@ -120,8 +120,11 @@ export function createHarness(cfg, deps) {
             + '若該行程是你（或本工作階段）先前啟動而殘留，確認後自行關閉再重跑；若是他人之行程，請回報使用者，勿自行殺除')
     }
 
-    //port 須無人監聽。只在監聽者全為「cleanup 同步殺掉、仍在結束中」之自建 PID，或 netstat 暫未列出時稍候重查；
-    //見到其他監聽者立即拋錯（同 Playwright 對已佔用 port 不等待）。netstat 不可用（null）而 TCP 可連時 fail-closed。
+    //port 須無人監聽。只在監聽者全為「cleanup 同步殺掉、仍在結束中」之自建 PID，或兩路查詢（netstat 與 Get-NetTCPConnection，由 listenerPids 內部確認）皆回報無人、
+    //而 TCP 仍可連（行程已結束、socket 關閉中）時，於 rebindWaitMs 內稍候重查；逾時仍可連即拋錯，不放行。
+    //見到其他監聽者立即拋錯（同 Playwright 對已佔用 port 不等待）。查詢失敗（null）而 TCP 可連時 fail-closed。
+    //2026-10-30：listenerPids 回 [] 已表示「netstat 與 Get-NetTCPConnection 皆查無」，不再是「netstat 暫時漏列」；
+    //此分支僅容忍 TCP 探測與查詢之瞬間落差，等候上限與逾時後拋錯之行為與先前相同（未放寬）。
     async function ensurePortFree(port, label, my) {
         const t0 = now()
         for (;;) {
@@ -131,8 +134,8 @@ export function createHarness(cfg, deps) {
             guard(my)
             if (!busy) return
             const onlyDying = !!pids && pids.length > 0 && pids.every((p) => killedPids.has(String(p)))
-            const notListedYet = !!pids && pids.length === 0
-            if ((!onlyDying && !notListedYet) || now() - t0 >= budgets.rebindWaitMs) {
+            const unlistedButConnectable = !!pids && pids.length === 0
+            if ((!onlyDying && !unlistedButConnectable) || now() - t0 >= budgets.rebindWaitMs) {
                 throw portBusyError(port, label, pids)
             }
             await sleep(200)
@@ -227,9 +230,10 @@ export function createHarness(cfg, deps) {
         }
         const bad = startFailure(isBackend, e)
         if (bad) { throw await failNow(bad) }
-        const pids = listenerPids(port)
+        //身分確認須取完整監聽者集合：useBoth 使 Windows 下 netstat 與 Get-NetTCPConnection 皆查並取聯集（netstat 有列出時預設不再查後者，可能只見部分監聽者）
+        const pids = listenerPids(port, { useBoth: true })
         if (pids === null) {
-            log(`[e2e-setup] 警告：無法查詢 port ${port} 之監聽者 PID（netstat／lsof 不可用），僅以「啟動前 port 為空＋自建行程存活」為據`)
+            log(`[e2e-setup] 警告：無法查詢 port ${port} 之監聽者 PID（系統查詢指令不可用、逾時或輸出無法解析），僅以「啟動前 port 為空＋自建行程存活」為據`)
         }
         else if (!isOwnedBy(pids, child.pid)) {
             throw await failNow(`port ${port} 由 ${describeProcs(pids) || '無人'} 監聽，不是（或不只是）剛啟動之自建行程（PID ${child.pid}）；可能有其他行程同時搶用此 port`)
@@ -325,7 +329,8 @@ export function createHarness(cfg, deps) {
             for (const e of own) {
                 if (e.child.pid && pidExists(e.child.pid)) { leftover.push(`${e.name} PID ${e.child.pid} 仍存在`) }
                 if (e.port) {
-                    const pids = listenerPids(e.port)
+                    //cleanup 可在 exit／signal 處理器內執行：查詢逾時給回驗上限（同步子指令阻塞事件迴圈，預設 10 秒過長）
+                    const pids = listenerPids(e.port, { timeout: budgets.verifyMs })
                     if (pids && pids.length > 0) { leftover.push(`port ${e.port} 仍被 PID ${pids.join(',')} 監聽`) }
                 }
             }

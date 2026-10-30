@@ -1,5 +1,6 @@
 import get from 'lodash-es/get.js'
 import isestr from 'wsemi/src/isestr.mjs'
+import isfun from 'wsemi/src/isfun.mjs'
 
 
 /**
@@ -7,15 +8,21 @@ import isestr from 'wsemi/src/isestr.mjs'
  *
  * 以「操作:操作者 id」於 wsemi cacheSt 原子占位執行 fn, 同一操作者之同一操作處理中再送出即 reject 錯誤 key
  * (預設 'saveInProgress', 可以 opt.errKey 指定; 皆為 i18n key, 見 procLang); 不同操作者、不同操作互不影響;
- * fn 之 reject 原樣 bubble; fn 結束(含失敗)即釋放.
+ * fn 之 reject 為來源不明之外來值(業務函式內可能含後端或驅動例外), 轉出前經 diag.err 遮罩(無應遮者原樣, 固定 key 不變); fn 結束(含失敗)即釋放.
  * 第 2 次不排隊執行: 其內容與第 1 次相同, 排隊後再寫一次會把第 1 次剛建立之列當修改覆寫
  * (依序重送另由各專案之資料層檢查擋, 如 SSO procCore.updateTabItems 之新增列檢查回 'saveNewRowExists').
  * operatorId 可為操作者 id 或「操作者 id + 列識別」(只擋同一列之連發, 同批其他列不受影響).
  *
  * @param {Object} cst 輸入 wsemi cacheSt 實例
+ * @param {Function} diag 輸入外來值遮罩出口(server/genDiag.mjs 之結果, 須帶 err), 非函式或缺 err 即拋 invalid diag
  * @returns {Function} 回傳 async (op, operatorId, fn, opt = {}) => fn 之結果, opt.errKey 為占位衝突時 reject 之 key
  */
-function createLockSave(cst) {
+function createLockSave(cst, diag) {
+
+    //check
+    if (!isfun(diag) || !isfun(diag.err)) {
+        throw new Error('invalid diag')
+    }
 
     let lockSave = async (op, operatorId, fn, opt = {}) => {
 
@@ -28,11 +35,11 @@ function createLockSave(cst) {
         let key = `${op}:${operatorId}`
         return await cst.setWithFree([key], fn)
             .catch((err) => {
-                //remap setWithFree 之占位衝突 → i18n key; fn 內之 reject 原樣 bubble
+                //remap setWithFree 之占位衝突 → i18n key; fn 內之 reject 為來源不明之外來值, 經 diag.err 遮罩後 bubble
                 if (err === `setWithFree: key in use: ${key}`) {
                     return Promise.reject(errKey)
                 }
-                return Promise.reject(err)
+                return Promise.reject(diag.err(err))
             })
     }
 
