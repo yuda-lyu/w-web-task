@@ -116,6 +116,17 @@
 - **`espree` 為 eslint 之直接相依**: `test/tools/consoleSites.mjs` 以之掃 AST; 本套件 `package.json` 只明列 eslint(devDependencies), 若日後 eslint 升版改相依, 該 import 須同步.
 - **變異在副本進行**(`tmp/task/mutate.mjs`, 已清): 每個變異 `fs.cpSync` 複製 `server/`、`src/schema`、`toolg`、四個根檔與四個測試檔(約 0.1 秒), mocha 以 `spawnSync` 之 `cwd` 選項在副本跑(不用 `cd`), 每批以一次 `quiet-run --lock` 包住; 每變異約 10 秒, 39 個變異加對照分兩批. **`quiet-run --lock` 之排鎖等待計入前景指令之 10 分鐘上限與 `--timeout`**: 第二批於他套件佔滿兩槽時排了約 11 分鐘, 被工具移到背景; 長批次改 `run_in_background` 並以 Monitor 等待.
 
+## E2E-012 標準圖差 608 px: 依賴升版使點擊後焦點框消失(2026-11-02, wt286; 規則見 `rulebook_test.md` R-E2E-GRID-01)
+
+- **徵狀**: 全庫跟跑(11-02 23:00)`E2E-012-task-detail` eng / cht 皆 `diff=608px`(兩語言同值, 單獨重跑仍紅); 差異只有一處: 標準圖中被點之儲存格「Fetch external metrics」有藍色焦點框, 現況沒有。
+- **綠→紅之區間不是 11-02 之升版**: 11-01 綠燈 log 時間為 **04:41**, 當時 `node_modules` 應為 commit `1f1a5d3`(10-31 18:10)之鎖定, w-aggrid-vue **2.1.15**(推定: 實測 ≥ 2.1.16 此案必紅而該 log 為綠); 89af63d(11-01 13:15)才升到 2.1.17, b29e87f(11-02)再升 2.1.18, 後兩者 `src` 與 2.1.17 逐字相同。判斷「哪次升版」前先核對**測試 log 之時間**對應哪個 commit 之 `package-lock.json`, 不以「上一次綠之 commit 日期」推。
+- **根因(實測)**: w-aggrid-vue ≥ **2.1.16**(2026-10-31T19:06Z 發布; 其規則帳本 R26、Gitea #31)新增淡入補繪: 淡入(0.5 秒)期間根節點尺寸改變者, 淡入結束並去抖 350ms 後 `api.refreshCells({ force: true })` 一次(`WAggridVue.vue:1686` `finishFade`; 其帳本第 6 節 #25 已載「自訂 cell-render slot 之儲存格被重建一次」)。本案 `clickTaskTitle` 於表格掛載後約 430～540ms 點擊, 詳情面板出現使表格縮高, 正落在淡入期間 → 補繪銷毀格內 `<button>`(`removeChild` 堆疊: `RowRenderer.refreshCells ← GridApi.refreshCells ← finishFade ← pmConvertResolve ← debounce`), 焦點在被點按鈕上故落到 `body`, 儲存格仍帶 `ag-cell-focus` 類別但 `:focus-within` 不成立, 藍框(`rgb(0,145,234)`)變回透明。
+- **二分(單變數, `./tmp/wt286/old-copy` = 89af63d 之鎖定, 只換 w-aggrid-vue)**: 未改動之測試 2.1.15 → `2 passing`; 2.1.16 → 兩語言皆 `diff=608px`(與全庫一致)。探針於截圖時點: 2.1.15 `activeElement=BUTTON`、框 `rgb(0,145,234)`; 2.1.16／2.1.17／2.1.18 `activeElement=BODY`、框透明。w-component-vue、wsemi、w-package-tools-e2e 之升版不是原因(副本以舊版該三者仍紅; 2.1.15 配新版該三者之組合未另測, 因探針已證 2.1.17 與舊三者組合即紅)。
+- **處置(丙: 測試之截圖依賴競態中之焦點狀態)**: `clickTaskTitle` 點擊前等被點按鈕所屬表格之 `state === 'shown'`(元件狀態機訊號, 非固定等待); 落定後才點則表格不補繪, 焦點框維持, 與既有標準圖一致(0 張重產)。不重產標準圖之理由: 標準圖之藍框是使用者一般操作(表格已落定)之狀態, 重產會把「淡入窗內點擊」之競態結果凍結為真理。
+- **不遮蔽真缺陷**: 補繪窗內點擊之行為屬 w-aggrid-vue 之元件行為(其 e2e-fadeState 守護), 不在本套件規格; 若落定後之表格仍丟焦點, 標準圖比對照樣差 608 px 抓到(`state==='shown'` 之等待不影響落定後之行為)。
+- **使用者可觀察之差異**: 只在「表格剛出現約 0.9 秒內點儲存格內按鈕」時, 詳情面板照常開啟、操作不受影響; 差別為該格之藍色焦點框消失、鍵盤焦點落到頁面(方向鍵不再於格間移動, 須再點一次表格)。屬 R26 之副作用, 未記於其已知限制; 修法建議見任務報告。
+- **探針與副本之作法**(留給日後類似二分): 副本只放 `git archive <舊 commit>` 之必要檔(不含 `dist`/`docs`), `npm --prefix <副本> ci --ignore-scripts`(約 4 分鐘), 換單一套件以 `npm pack <套件>@<版> --pack-destination` 取 tgz 解入副本之 `node_modules/<套件>`(副本內可 `rm -rf` 該夾, 無目錄連結); 以副本之 `test/tools/e2e-setup.mjs` 與其 `node_modules/mocha` 於主專案根執行, 標準圖仍取主專案(`PICS_DIR` 相對 cwd)。探針腳本以 `PROBE_ROOT` 指向副本。**e2e 之 dev server 實際載入 w-aggrid-vue 之 `src`**(堆疊顯示 `webpack-internal:///./node_modules/w-aggrid-vue/src/components/WAggridVue.vue`、`wsemi/src/debounce.mjs`), 非 `dist`; 2.1.17 與 2.1.18 之 `src` 逐字相同(僅 `package.json` 相依範圍不同), 其 `dist` 之差異來自內嵌之新版 wsemi, 與本案無關。比對 w-aggrid-vue 行為時以 `src` 差異為準。
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

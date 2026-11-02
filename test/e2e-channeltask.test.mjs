@@ -196,10 +196,15 @@ async function taskRowStateText(page, title) {
 }
 
 //點後台任務 grid 中「標題為 title 之列」之標題 <button>（真實點擊 → onClickTaskTitle 開詳情面板）。
+//點擊前須等該表格淡入落定（w-aggrid-vue 根節點 .CompCssWAggridVue 之 state 屬性 showing → shown）: 淡入期間點標題使詳情面板出現、表格縮高,
+//淡入結束後元件（w-aggrid-vue ≥ 2.1.16, 其規則帳本 R26）會對儲存格 refreshCells({ force: true }) 一次, 銷毀並重建格內 <button>,
+//被點之按鈕連同鍵盤焦點落到 body、儲存格之藍色焦點框（:focus-within）消失; 落定後才點則無此補繪, 焦點框維持（與標準圖一致, 亦為使用者一般操作之狀態）。
+//以元件狀態機訊號同步（技能 role-coder-for-test-e2e §8.1: 元件狀態機優先於幾何輪詢）, 不用固定等待。
 async function clickTaskTitle(page, title) {
-    await waitUntilExist(page, `任務列標題「${title}」就緒`, (t) => {
-        let btns = [...document.querySelectorAll('.ag-root-wrapper button')]
-        return btns.some((x) => (x.innerText || '').trim() === t)
+    await waitUntilExist(page, `任務列標題「${title}」就緒且表格淡入落定`, (t) => {
+        let b = [...document.querySelectorAll('.ag-root-wrapper button')].find((x) => (x.innerText || '').trim() === t)
+        let shell = b && b.closest('.CompCssWAggridVue')
+        return !!shell && shell.getAttribute('state') === 'shown'
     }, { timeout: 20000, arg: title })
     await page.locator('.ag-root-wrapper button', { hasText: title }).first().click()
     await waitUntilExist(page, `任務詳情面板開啟（${title}）`, () => {
