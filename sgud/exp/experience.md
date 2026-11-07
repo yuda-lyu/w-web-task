@@ -127,6 +127,16 @@
 - **使用者可觀察之差異**: 只在「表格剛出現約 0.9 秒內點儲存格內按鈕」時, 詳情面板照常開啟、操作不受影響; 差別為該格之藍色焦點框消失、鍵盤焦點落到頁面(方向鍵不再於格間移動, 須再點一次表格)。屬 R26 之副作用, 未記於其已知限制; 修法建議見任務報告。
 - **探針與副本之作法**(留給日後類似二分): 副本只放 `git archive <舊 commit>` 之必要檔(不含 `dist`/`docs`), `npm --prefix <副本> ci --ignore-scripts`(約 4 分鐘), 換單一套件以 `npm pack <套件>@<版> --pack-destination` 取 tgz 解入副本之 `node_modules/<套件>`(副本內可 `rm -rf` 該夾, 無目錄連結); 以副本之 `test/tools/e2e-setup.mjs` 與其 `node_modules/mocha` 於主專案根執行, 標準圖仍取主專案(`PICS_DIR` 相對 cwd)。探針腳本以 `PROBE_ROOT` 指向副本。**e2e 之 dev server 實際載入 w-aggrid-vue 之 `src`**(堆疊顯示 `webpack-internal:///./node_modules/w-aggrid-vue/src/components/WAggridVue.vue`、`wsemi/src/debounce.mjs`), 非 `dist`; 2.1.17 與 2.1.18 之 `src` 逐字相同(僅 `package.json` 相依範圍不同), 其 `dist` 之差異來自內嵌之新版 wsemi, 與本案無關。比對 w-aggrid-vue 行為時以 `src` 差異為準。
 
+## dev server proxy 重用連線與 TIME_WAIT 輕量量測(2026-11-07, pt347, 排程第 347 項; 規則見 `rulebook_test.md` R-E2E-PROXY-01)
+
+- **凍結套件的例外解凍**: 本套件 `CLAUDE.md` 首行載凍結(不參與連動、要動先問); 使用者 2026-11-07 裁定例外解凍只改 `vue.config.js` 之 proxy 並發布. 凍結聲明仍在、本輪未動 `CLAUDE.md`; 日後再動本套件仍須先問.
+- **同型問題以姊妹套件的實測為準, 本套件只驗「效果有到、行為不變」**: 修法與單元測試比照姊妹套件(`new http.Agent({ keepAlive: true })` 掛在 `/api` proxy; 單元測試走 `prepareProxy` → `createProxyMiddleware` 之實際建構路徑, 埠皆 `listen(0)`), 修前 PX-001 / 002 紅(後端連線數 20 對 1、20/20 個回應帶 `Connection: close`), PX-003(內容不變)修前即綠——它守的是修後不退化.
+- **輕量量測法**(抽樣腳本隨 pt347 報告證據保存, repo 內 `tmp/pt347/` 已清): 每 5 秒 `netstat -ano`, 以「本輪新出現之 TIME_WAIT 四元組」計新增量(TIME_WAIT 約 2 分鐘 > 取樣間隔), 現存數看峰值; **全機數字受同機他套件測試影響**(取樣期間見 11006、8090 等他套件埠之 TIME_WAIT), 故以**實例埠**(8091 / 11108 / 11208, 本機埠或遠端埠任一命中)切出本套件之貢獻, 並本機埠 / 遠端埠兩欄都看(伺服端先關者其本機埠為服務埠).
+- **抽樣窗要用 e2e 實際起訖切, 不用抽樣器起訖**: `quiet-run --lock` 排鎖等待(本輪修後排了 13 分 12 秒)與前一輪結束後約 2 分鐘的 TIME_WAIT 衰減, 都會落進抽樣器的窗口; 實際起點 = 取得鎖之時刻(log 檔名時間 + 等待時間), 並以實例埠現存數歸零作交叉確認. 本輪修前窗尾只留 30 秒、修後留約 2 分鐘, 對照時兩邊都截在「e2e 結束 + 30 秒」.
+- **結果**(單檔 `e2e-channeltask` 34 案, 前後各一次, 皆 34 passing): 實例埠 TIME_WAIT 現存峰值 231 → 28; 實例埠新增四元組 1,232 → 124; 本機埠 11108 / 8091 之現存峰值 114 / 109 → 4 / 4; 本機埠 11108 / 8091 之新增 568 / 578 → 20 / 22(修後取整個抽樣窗之合計, 比 e2e 窗多 6 條). 修後遠端埠欄為 8091 / 11108 者由 21 / 65 增為 53 / 35(keep-alive 連線在瀏覽器或 agent 關閉時由用戶端先關, TIME_WAIT 落在用戶端, 屬預期且總量下降約 9 成). 本檔經 proxy 之 `/api` 請求不多(每案新增約 36 條), 差異不如姊妹套件分拆全套(17,979 → 407)顯著, 不另造負載.
+- **全機峰值不作歸因**: 修前 636、修後 249(e2e 窗口內), 同窗口他套件測試亦在跑, 不拿來宣稱本改動效果.
+- **殘留列表項**: 修前 e2e 結束後 `netstat` 仍見 8091 / 11108 之 `FIN_WAIT_1` / `CLOSED` 且 PID 為 0 的核心殘留項(無 LISTENING、無行程), 以 `Get-NetTCPConnection` 的 `OwningProcess=0` 交叉確認, 非 harness 殘留.
+
 ## 工具使用要點
 
 - **w-screenctl 調 RWD 須 `viewport=null`**: 以 `viewport:{width,height}` 開瀏覽器會把 content 尺寸釘死, 拖拉視窗無法改變寬高; 要驗 RWD 時不傳 viewport, 讓 content 跟隨 OS 視窗大小.

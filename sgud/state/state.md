@@ -2,7 +2,7 @@
 
 本檔只記**現況**(各功能做到哪裡、對應之規則帳本條目與測試檔、已知缺口與待辦、最近一次驗證或發布之版本); 過程與教訓見 `sgud/exp/experience.md`。接續工作先讀本檔。規則帳本索引見 `sgud/rule/rulebook.md`(2026-10-22 起依類型分冊)。
 
-更新: 2026-11-03(任務 wt286〔20261031121854〕: E2E-012 標準圖差 608 px 查因, 改 `clickTaskTitle` 等表格淡入落定; 標準圖 0 張改變); 前一次為 2026-10-31(任務 task〔20261031023204〕: console 診斷輸出不印資料值〔第 191、165 項, D22 取代 D15 之 N7〕); 再前一次為 2026-10-30(任務 b-task〔20261030184428〕: 轉接器傳 `safeKeys: SAFE_KEYS`、`genDiag` 改 wsemi `getDiagSecrets({ conns })`、不 import w-serv-orm 診斷內部檔〔第 187、192 項下游〕); 前一次為 2026-10-30(任務 mig-task3〔20261029002013〕: harness 查埠改用 wsemi 1.9.32／w-package-tools-e2e 1.0.12 之 `listenerPids`); 再前一次為 2026-10-29(任務 mig-task〔20261029002013〕: 診斷輸出遷移至 wsemi 共用模組〔第 161 項〕); 再前一次為 2026-10-28(任務 task-run01〔20261028054319〕: w-serv-orm 診斷輸出導入 srLog〔第 154 項, D21〕; 前一次為 2026-10-26 task-run01〔20261026145816〕: 角色用詞統一為「系統管理者」; 前一次為 2026-10-25 task-run01〔20261025111554〕: 呼叫者身分驗證——C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊)
+更新: 2026-11-07(任務 pt347〔20261107181536〕: 凍結例外解凍, dev server `/api` proxy 加 keep-alive agent〔第 347 項, R-E2E-PROXY-01〕; 標準圖 0 張改變); 前一次為 2026-11-03(任務 wt286〔20261031121854〕: E2E-012 標準圖差 608 px 查因, 改 `clickTaskTitle` 等表格淡入落定; 標準圖 0 張改變); 前一次為 2026-10-31(任務 task〔20261031023204〕: console 診斷輸出不印資料值〔第 191、165 項, D22 取代 D15 之 N7〕); 再前一次為 2026-10-30(任務 b-task〔20261030184428〕: 轉接器傳 `safeKeys: SAFE_KEYS`、`genDiag` 改 wsemi `getDiagSecrets({ conns })`、不 import w-serv-orm 診斷內部檔〔第 187、192 項下游〕); 前一次為 2026-10-30(任務 mig-task3〔20261029002013〕: harness 查埠改用 wsemi 1.9.32／w-package-tools-e2e 1.0.12 之 `listenerPids`); 再前一次為 2026-10-29(任務 mig-task〔20261029002013〕: 診斷輸出遷移至 wsemi 共用模組〔第 161 項〕); 再前一次為 2026-10-28(任務 task-run01〔20261028054319〕: w-serv-orm 診斷輸出導入 srLog〔第 154 項, D21〕; 前一次為 2026-10-26 task-run01〔20261026145816〕: 角色用詞統一為「系統管理者」; 前一次為 2026-10-25 task-run01〔20261025111554〕: 呼叫者身分驗證——C3 執行身分完整驗證、C2 / C2b 函數層級角色與成員檢查、第 128 項系統函數收緊)
 
 ## 版本與驗證
 
@@ -35,6 +35,7 @@
 | 按鈕雙擊防護(D16) | 已上線(前端 `runSubmit`、後端 `lockSave`; 「確保成員列」之原子化由 D18 之表鎖取代原共用 kmx key) | `rulebook_backend.md` D16; `rulebook_ui.md` | `unit-submitGuard`、`unit-lockSave`、`api-doubleclick` |
 | 前端 UI(RWD D13、i18n、彈窗) | 已上線; 後台頻道 / 成員頁新增草稿保護提示條與成員重複之警告圖示; **儲存格編輯器開啟中(已輸入未按 Enter)收到推播視同草稿**(不重建、凍結基準、提示; 編輯器關閉後依一般規則; N1 已修) | `rulebook_ui.md`; `rulebook_concurrency.md` R-CONC-09 | `unit-rwd`、`unit-draft`; e2e E2E-016 / 017 |
 | e2e(17 案 × eng / cht = 34) | 標準圖 58 張(既有 36 + E2E-014 / 015 新增 16 + E2E-016 / 017 新增 6); harness 單一擁有者 | `rulebook_test.md` | `e2e-channeltask` |
+| dev server `/api` proxy 重用連線(測試基礎設施; 排程第 347 項, 2026-11-07 pt347; 本套件凍結, 使用者 2026-11-07 裁定例外解凍只改這一處) | **已做**(工作樹未提交, `package.json` 版本未動): `vue.config.js` 之 `devServer.proxy['/api']` 帶模組層 keep-alive agent(原 http-proxy 預設每請求新開連線並送 `Connection: close`, 兩段各留 TIME_WAIT); `target`(`WTASK_DEV_PROXY_TARGET` 或預設 11008)與 `pathRewrite` 不變; 只影響開發與 e2e. 修前 `unit-devProxyKeepAlive` PX-001 / 002 紅, 修後 3 綠. `e2e-channeltask` 修前 / 修後各一次皆 34 passing; 實例埠(8091 / 11108 / 11208)TIME_WAIT 現存峰值 231 → 28、新增四元組 1,232 → 124(輕量量測, 方法與限制見經驗). 全套 `npm test`(`--lock`): **641 passing / 0 failing / 0 pending**(13m04s); `test/pics` 無變更. CLAUDE.md 之凍結聲明未動, 日後再動本套件仍須先問 | R-E2E-PROXY-01(`rulebook_test.md`) | `unit-devProxyKeepAlive`(3) |
 
 ## 多人同時編輯(原則 10)
 

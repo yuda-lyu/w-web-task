@@ -82,3 +82,14 @@
 |---|---|---|---|
 | **R-E2E-GRID-01**: e2e 點 ag-grid 儲存格內之控制項(按鈕)而其後畫面入標準圖者, 點擊前須等該表格根節點 `.CompCssWAggridVue` 之 `state` 為 `shown`(以被點按鈕之 `closest('.CompCssWAggridVue')` 判, 不用固定等待)。**成因**: w-aggrid-vue ≥ 2.1.16(其 R26)於淡入期間尺寸有改變者, 淡入結束並去抖 350ms 後 `api.refreshCells({ force: true })` 一次, 銷毀並重建格內 `<button>`; 點標題使詳情面板出現、表格縮高即落在淡入期間, 被點按鈕連同鍵盤焦點落到 `body`、儲存格 `.ag-cell-focus:focus-within` 之藍框(`rgb(0,145,234)`)消失, 標準圖(2.1.15 時代產製, 有藍框)差 608 px。w-aggrid-vue ≤ 2.1.15 無補繪。落定後才點則無補繪, 焦點框維持(與標準圖一致, 亦為使用者一般操作之狀態) | `clickTaskTitle`(`e2e-channeltask.test.mjs:203`)之 4 個呼叫點: E2E-012 三處(`:880`、`:884`、`:902`)、E2E-013 一處(`:968`, 在 `semantic()` 內、截圖之後, 不入圖); 其餘 ag-grid 儲存格互動為 E2E-005 / 008 / 010 / 014～017 之雙擊編輯(Pattern B, 各自等編輯器出現, 流程遠長於淡入, 實測全數通過) | 已套(2026-11-02); 不屬本規則: 表格就緒前之任何點擊、`dblclick` 編輯 | `grep -n "clickTaskTitle(" test/e2e-channeltask.test.mjs`(定義 1＋呼叫 4); `grep -n "closest('.CompCssWAggridVue')" test/e2e-channeltask.test.mjs`(應 1, 於 `clickTaskTitle` 內; 另有 1 行為其說明註解) |
 
+## dev server `/api` proxy 重用連線(R-E2E-PROXY-01; 2026-11-07 pt347, 排程第 347 項)
+
+起因: 姊妹套件查得 dev server 之 `/api` proxy 未給 agent 時, 每個請求兩段(瀏覽器→dev server、dev server→後端)各新開一條連線並各留一個 TIME_WAIT(分拆 e2e 全機 TIME_WAIT 峰值上萬, 同機他測試可能偶發 `connect EADDRINUSE`); 本套件 `vue.config.js` 為同型寫法. 本套件為凍結套件, 使用者 2026-11-07 裁定例外解凍只改這一處. 現況與量測數字見 `sgud/state/state.md` 功能現況表.
+
+| 規則 | 內容 | 盤點 / 驗證 |
+|---|---|---|
+| 1. `/api` proxy 以 keep-alive agent 重用至後端之連線 | `vue.config.js` 之 `devServer.proxy['/api']` 帶 `agent: proxyAgent`(模組層單一 `new http.Agent({ keepAlive: true })`); `target`(`WTASK_DEV_PROXY_TARGET` 或預設 `http://localhost:11008`)與 `pathRewrite` 不變. 理由: http-proxy 1.18.1 未給 agent 時 `outgoing.agent = false` 並強制送 `Connection: close`(`node_modules/http-proxy/lib/http-proxy/common.js:62-73`), 後端回應之 `connection: close` 又被原樣轉回瀏覽器(`passes/web-outgoing.js:44-46`), 使每個 `/api` 請求兩段各一條新連線, 皆由伺服端先關而留 TIME_WAIT. vue-cli 之 `prepareProxy` 以 `Object.assign({}, defaultConfig, config, entry)` 合併(`@vue/cli-service/lib/util/prepareProxy.js:133`), `agent` 原樣傳到 http-proxy | `unit-devProxyKeepAlive` PX-001(N 請求後端只 1 條)、PX-002(回應不帶 `Connection: close`、用戶端只 1 條)、PX-003(路徑 / 方法 / 狀態 / 內文不變); 修前 PX-001 / 002 紅(20 / 20) |
+| 2. 新增 proxy 路徑沿用同一 agent | 日後 `devServer.proxy` 加其他路徑時同帶 `agent: proxyAgent`; 只影響開發與 e2e(正式部署由後端直接 serve `dist`, 無 proxy) | `Grep -n "agent" vue.config.js` |
+| 3. 判讀 TIME_WAIT 方向 | 伺服端先關之 TIME_WAIT 其**本機埠**為服務埠(遠端為臨時埠); 只看「遠端埠」會漏掉一大半. 看 TIME_WAIT 時本機埠 / 遠端埠兩欄都看 | — |
+| 4. 已知限制 | ①harness 之 `/api` 流量不大時(`e2e-channeltask` 單檔)前後差異有限, 量測數字見 state; ②agent 之閒置連線依後端 `Keep-Alive: timeout=5` 提示於約 4 秒後由用戶端關閉, 案例間隔較長時仍會新開; ③後端被 `reseedBackend` 終止時池中連線隨對端關閉而移除(測試實測全綠, 理論上存在毫秒級窗口) | — |
+
